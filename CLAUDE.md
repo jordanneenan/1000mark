@@ -57,6 +57,7 @@ Percentile view: a Points ⇄ Percentile switch. A percentile is the share of ot
 - Score checks: `implausible()` refuses runs that mix test kinds, exceed 25 times the reference on any test or 12 times on the system score, or claim more multi-core speed than the threads allow. `outliers()` holds back runs over 1.6 times the median of at least five others on the same chip from the leaderboard and percentiles.
 - Security headers on every response (CSP, frame denial, HSTS). Static files: browsers revalidate (ETag), Cloudflare's edge caches for five minutes.
 - The static file list is an allowlist (`ALLOWED`); add new site files there and to `SITE` in `native/src/main.rs`.
+- Support requests call an optional webhook (`notify.json` next to `KEYS_FILE`, `{ "url": ... }`) so the owner gets a phone notification. Fire and forget, no email addresses in it. Without the file nothing is sent.
 - Computer-test hand-off: the finished run is POSTed to `/api/handoff` (no sign-in, kept a day) and the site opens at `#claim=TOKEN`; the run is saved to the account now or on sign-in.
 
 ## Computer test (`native/`)

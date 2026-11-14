@@ -35,6 +35,17 @@ if (!fs.existsSync(KEYS_FILE)) {
   console.log(`Made new keys in ${KEYS_FILE}. Back this file up: without it, stored emails cannot be read.`);
 }
 const KEYS = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8'));
+// Optional: notify.json next to the keys file holds { "url": "..." }, a webhook that is told about new
+// support requests (a Home Assistant automation that pushes a notification to the owner's phone). The
+// URL is a secret, so it lives outside the repository. No file, no notifications.
+const NOTIFY = (() => { try { return JSON.parse(fs.readFileSync(path.join(path.dirname(KEYS_FILE), 'notify.json'), 'utf8')).url || null; } catch { return null; } })();
+// Fire and forget: a notification that fails must never fail the request it is about. No email
+// addresses go in it; those stay encrypted in the database and are read with server/admin.mjs.
+function notify(title, message) {
+  if (!NOTIFY) return;
+  fetch(NOTIFY, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, message }), signal: AbortSignal.timeout(5000) })
+    .then(r => { if (!r.ok) console.error('notify: webhook answered', r.status); }).catch(e => console.error('notify:', e.cause?.code || e.message));
+}
 const EMAIL_KEY = Buffer.from(KEYS.emailKey, 'base64'), INDEX_KEY = Buffer.from(KEYS.emailIndexKey, 'base64');
 if (EMAIL_KEY.length !== 32 || INDEX_KEY.length !== 32) { console.error('Bad keys file.'); process.exit(1); }
 const emailIdx = e => crypto.createHmac('sha256', INDEX_KEY).update(e).digest('base64url');
@@ -465,8 +476,11 @@ async function api(req, res, route) {
     const email = cleanEmail(b.email), kind = ['unlock', 'other'].includes(b.kind) ? b.kind : 'other', message = String(b.message || '').trim().slice(0, 4000);
     if (kind === 'other' && message.length < 10) throw new Fail(400, 'Tell us a little more about what you need.');
     if (q('SELECT COUNT(*) AS n FROM support WHERE status = ?').get('open').n > 2000) throw new Fail(503, 'Too many open requests. Try again later.');
-    q('INSERT INTO support (created, email_enc, email_idx, kind, message) VALUES (?, ?, ?, ?, ?)').run(Date.now(), sealEmail(email), emailIdx(email), kind, message);
+    const id = q('INSERT INTO support (created, email_enc, email_idx, kind, message) VALUES (?, ?, ?, ?, ?)').run(Date.now(), sealEmail(email), emailIdx(email), kind, message).lastInsertRowid;
     console.log(new Date().toISOString(), 'support request', kind);
+    const hasAccount = !!q('SELECT 1 FROM users WHERE email_idx = ?').get(emailIdx(email));
+    notify(kind === 'unlock' ? 'unlock request' : 'new support request',
+      `#${id}${kind === 'unlock' ? `, ${hasAccount ? 'for an existing account' : 'but no account uses that email'}` : ''}${message ? `: "${message.slice(0, 140)}${message.length > 140 ? '…' : ''}"` : ''}. Read it with admin.mjs requests.`);
     return send(res, 200, { ok: true });
   }
 
