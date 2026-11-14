@@ -1,7 +1,7 @@
-import { CATS, TESTS, REF_DEVICE, PROFILES, scoreRun, scoreTest, addSizes, ramGB } from './scoring.js';
-import { bars, radar, columns, lanes, esc, fmt, pts } from './charts.js';
-import { runGpu, glRenderer } from './tests/gpu.js';
-import { runMedia } from './tests/media.js';
+import { CATS, TESTS, REF_DEVICE, PROFILES, scoreRun, scoreTest, addSizes, ramGB } from './scoring.js?v=dev';
+import { bars, radar, columns, lanes, esc, fmt, pts } from './charts.js?v=dev';
+import { runGpu, glRenderer } from './tests/gpu.js?v=dev';
+import { runMedia } from './tests/media.js?v=dev';
 
 const app = document.getElementById('app');
 const store = {
@@ -177,7 +177,7 @@ function call(w, data, onProgress) {
     w.postMessage({ ...data, id });
   });
 }
-const worker = name => new Worker(new URL(`./tests/${name}.worker.js`, import.meta.url));
+const worker = name => new Worker(new URL(`./tests/${name}.worker.js?v=dev`, import.meta.url));
 
 function buildSteps(rec, workers) {
   const ms = 1000, quick = false, steps = [];
