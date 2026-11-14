@@ -1,0 +1,23 @@
+[package]
+name = "pressmark"
+version = "0.1.0"
+edition = "2021"
+description = "1000Mark computer test: tests the CPU, GPU, memory and storage directly and shows the results in the browser."
+
+[dependencies]
+sysinfo = "0.33"
+wgpu = "24"
+pollster = "0.4"
+serde_json = "1"
+tiny_http = "0.12"
+sha2 = "0.10"
+open = "5"
+ureq = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
