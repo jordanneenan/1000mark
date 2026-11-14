@@ -52,20 +52,6 @@ fn noise(p: vec2<f32>) -> f32 {
   return vec4<f32>(v, v * v, 1.0 - v, 0.5);
 }"#;
 
-const GEOM: &str = r#"
-struct VO { @builtin(position) pos: vec4<f32>, @location(0) c: vec3<f32> }
-@vertex fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) inst: u32) -> VO {
-  let fi = f32(inst);
-  let cx = fract(fi * 0.6180339) * 2.0 - 1.0;
-  let cy = fract(fi * 0.7548776) * 2.0 - 1.0;
-  let ang = fi * 0.1 + f32(v) * 2.0943951;
-  var o: VO;
-  o.pos = vec4<f32>(cx + cos(ang) * 0.004, cy + sin(ang) * 0.004, 0.5, 1.0);
-  o.c = vec3<f32>(fract(fi * 0.13), fract(fi * 0.71), 0.5);
-  return o;
-}
-@fragment fn fs(i: VO) -> @location(0) vec4<f32> { return vec4<f32>(i.c, 1.0); }"#;
-
 pub struct Info { pub name: String, pub backend: String, pub kind: String, pub driver: String, pub others: Vec<String>, pub vram: Option<(f64, bool)> }
 
 // The newer shaders are read out of tests/gpu.js, so the browser and the computer test cannot drift apart.
@@ -366,7 +352,7 @@ fn readback(d: &wgpu::Device, q: &wgpu::Queue, ms: u64) -> f64 {
 }
 
 pub const TESTS: &[(&str, &str)] = &[
-    ("gpu_matmul", "GPU · matrix compute"), ("gpu_particles", "GPU · particle compute"), ("gpu_fill", "GPU · pixel shading"), ("gpu_geom", "GPU · triangle throughput"),
+    ("gpu_matmul", "GPU · matrix compute"), ("gpu_particles", "GPU · particle compute"), ("gpu_fill", "GPU · pixel shading"),
     ("gpu_scene", "GPU · game-like scene"), ("gpu_rays", "GPU · ray tracing (compute)"), ("gpu_upload", "GPU · upload"), ("gpu_readback", "GPU · readback"),
 ];
 fn crash(e: Box<dyn std::any::Any + Send>) -> String { e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "GPU test crashed".into()) }
@@ -391,7 +377,7 @@ impl Gpu {
         let (d, q) = (&self.device, &self.queue);
         catch_unwind(AssertUnwindSafe(|| match id {
             "gpu_matmul" => matmul(d, q, ms), "gpu_particles" => particles(d, q, ms),
-            "gpu_fill" => render(d, q, ms, FILL, 4, true, 4 * W as u64 * H as u64), "gpu_geom" => render(d, q, ms, GEOM, 400_000, false, 400_000),
+            "gpu_fill" => render(d, q, ms, FILL, 4, true, 4 * W as u64 * H as u64),
             "gpu_scene" => scene(d, q, ms), "gpu_rays" => rays(d, q, ms, &self.scene),
             "gpu_upload" => upload(d, q, ms), "gpu_readback" => readback(d, q, ms), _ => 0.0,
         })).map_err(crash)

@@ -92,15 +92,16 @@ export const TESTS = {
   gpu_matmul:    { cat: 'gpu', group: 'Compute', name: 'Matrix compute', unit: 'GFLOP/s', ref: 1542, bref: 811.4, what: 'A 512x512 matrix multiply in a compute shader.' },
   gpu_particles: { cat: 'gpu', group: 'Compute', name: 'Particle compute', unit: 'M updates/s', ref: 10720, bref: 10550, what: 'Moving a million particles per step.' },
   gpu_fill:      { cat: 'gpu', group: 'Drawing', name: 'Pixel shading', unit: 'Mpix/s', ref: 25550, bref: 24980, what: 'Layered noise shaded over a 1080p frame.' },
-  gpu_geom:      { cat: 'gpu', group: 'Drawing', name: 'Triangle throughput', unit: 'M tris/s', ref: 1495, bref: 787.3, what: '400,000 small triangles per frame.' },
   gpu_scene:     { cat: 'gpu', group: 'Drawing', name: 'Game-like scene', unit: 'fps', ref: 1059, bref: 706.4, what: '2,000 textured, lit objects (4 million triangles) with a depth buffer at 1080p, one draw call each.' },
   gpu_rays:      { cat: 'gpu', group: 'Ray tracing', name: 'Ray tracing (compute)', unit: 'M rays/s', ref: 2967, bref: 2137, what: 'A 131,000-triangle landscape at 1080p, a camera ray and a shadow ray per pixel, traced in a compute shader.' },
   gpu_rt:        { cat: 'gpu', group: 'Ray tracing', name: 'Ray tracing (hardware)', unit: 'M rays/s', ref: 10030, what: 'The same scene on the ray-tracing hardware where the test can reach it; otherwise the compute version stands in.' },
   gpu_upload:    { cat: 'gpu', group: 'Transfer', name: 'Upload to GPU', unit: 'MB/s', ref: 8110, bref: 1892, what: 'Sending data from memory to the graphics chip.' },
   gpu_readback:  { cat: 'gpu', group: 'Transfer', name: 'Read back from GPU', unit: 'MB/s', ref: 12110, bref: 7138, what: 'Fetching data back from the graphics chip.' },
+  // A plain triangle-throughput test was dropped before the freeze: on the reference GPU it ran up to
+  // seven times slower in some runs for no visible reason. The game-like scene covers triangles steadily.
   // Browsers without WebGPU: drawing only.
   gl_fill:       { cat: 'gpu', group: 'Drawing', name: 'Pixel shading (WebGL)', unit: 'Mpix/s', bref: 25000, what: 'Layered noise shaded over a 1080p frame.' },
-  gl_geom:       { cat: 'gpu', group: 'Drawing', name: 'Triangle throughput (WebGL)', unit: 'M tris/s', bref: 775, what: '200,000 small triangles per frame.' },
+  gl_geom:       { cat: 'gpu', group: 'Drawing', name: 'Triangle throughput (WebGL)', unit: 'M tris/s', unscored: true, what: '200,000 small triangles per frame.' },
   // Video goes through the browser's video engine in both tests (the computer test runs it on its results page).
   vid_enc_h264:  { cat: 'gpu', group: 'Video', name: 'H.264 encode 1080p', unit: 'fps', ref: 160, bref: 160, what: 'Compressing 1080p video, on the hardware encoder if there is one.' },
   vid_dec_h264:  { cat: 'gpu', group: 'Video', name: 'H.264 decode 1080p', unit: 'fps', ref: 1045, bref: 1045, what: 'Unpacking the same video.' },

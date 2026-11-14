@@ -66,20 +66,6 @@ fn noise(p: vec2<f32>) -> f32 {
   return vec4<f32>(v, v * v, 1.0 - v, 0.5);
 }`;
 
-const GEOM = `
-struct VO { @builtin(position) pos: vec4<f32>, @location(0) c: vec3<f32> }
-@vertex fn vs(@builtin(vertex_index) v: u32, @builtin(instance_index) inst: u32) -> VO {
-  let fi = f32(inst);
-  let cx = fract(fi * 0.6180339) * 2.0 - 1.0;
-  let cy = fract(fi * 0.7548776) * 2.0 - 1.0;
-  let ang = fi * 0.1 + f32(v) * 2.0943951;
-  var o: VO;
-  o.pos = vec4<f32>(cx + cos(ang) * 0.004, cy + sin(ang) * 0.004, 0.5, 1.0);
-  o.c = vec3<f32>(fract(fi * 0.13), fract(fi * 0.71), 0.5);
-  return o;
-}
-@fragment fn fs(i: VO) -> @location(0) vec4<f32> { return vec4<f32>(i.c, 1.0); }`;
-
 // Game-like scene: 2,000 lit, textured spheres of 2,048 triangles each, one draw call apiece with
 // its own uniforms (as a game sets per object), a depth buffer and a mipmapped texture, at 1080p.
 const SCENE = `
@@ -343,7 +329,6 @@ const GPU_TESTS = {
   gpu_matmul: ['GPU · matrix compute', (d, ms) => matmul(d, ms)],
   gpu_particles: ['GPU · particle compute', (d, ms) => particles(d, ms)],
   gpu_fill: ['GPU · pixel shading', (d, ms) => render(d, ms, FILL, 4, true, 4 * W * H)],
-  gpu_geom: ['GPU · triangle throughput', (d, ms) => render(d, ms, GEOM, 400000, false, 400000)],
   gpu_scene: ['GPU · game-like scene', (d, ms) => scene(d, ms)],
   gpu_rays: ['GPU · ray tracing', (d, ms) => rays(d, ms)],
   gpu_upload: ['GPU · upload', (d, ms) => upload(d, ms)],
