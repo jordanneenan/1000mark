@@ -23,7 +23,7 @@ export const CATS = [
   { id: 'gpu', name: 'GPU speed', short: 'GPU', weight: 0.25, ink: 'pink', blurb: 'Graphics chip: number-crunching, drawing (including a game-like scene), ray tracing, moving data, and video encoding and decoding.' },
   { id: 'memory', name: 'Memory speed', short: 'Memory', weight: 0.15, ink: 'mint', blurb: 'How fast RAM can be filled, read, copied and jumped around in.' },
   { id: 'storage-speed', name: 'Storage speed', short: 'Storage', weight: 0.25, ink: 'ink', blurb: 'How fast the drive writes and reads files: big streams, small scattered pieces one at a time and 32 at once, and lots of little files.' },
-  { id: 'capacity', name: 'Capacity', short: 'Size', weight: 0.12, ink: 'sun', blurb: 'How much memory, graphics memory and storage the computer has. Measured by the computer test only: a browser cannot see them.' },
+  { id: 'capacity', name: 'Capacity', short: 'Capacity', weight: 0.12, ink: 'sun', blurb: 'How much memory, graphics memory and storage the computer has. Measured by the computer test only: a browser cannot see them.' },
 ];
 
 // div turns the raw rate into the display unit. Sizes (curve) score through a curve of [GB, points]

@@ -23,7 +23,7 @@ export function bars(rows, { ref = null, max = null, cmpLabel = '', refText = ''
 
 // Radar of the part scores. items: [{label, value, cmp}]
 export function radar(items, cmpLabel = '') {
-  const W = 440, H = 380, cx = 220, cy = 196, R = 112, n = items.length;
+  const W = 520, H = 380, cx = 260, cy = 196, R = 112, n = items.length;
   // Log scale: each ring is double the one inside it, so one very high part cannot flatten the rest.
   const LOW = 125, hi = Math.max(2000, ...items.map(i => Math.max(i.value || 0, i.cmp || 0)));
   const top = LOW * 2 ** Math.ceil(Math.log2(hi / LOW));
