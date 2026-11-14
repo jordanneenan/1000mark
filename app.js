@@ -826,7 +826,7 @@ function devicesPage() {
     <div class="label">Compare</div>
     <section class="block">
       ${browserToggle() ? `<div class="lb-controls">${browserToggle()}</div>` : ''}
-      <div class="picker">${gs.map(g => `<button class="mini ${picked.includes(g) ? 'on' : ''}" data-act="col" data-id="${esc(g.key)}" aria-pressed="${picked.includes(g)}">${esc(g.label)} · ${g.kind}</button>`).join('')}</div>
+      <div class="picker">${gs.map(g => `<button class="mini ${picked.includes(g) ? 'on' : ''}" data-act="col" data-id="${esc(g.key)}" aria-pressed="${picked.includes(g)}">${esc(g.label)} · ${g.kind === 'app' ? 'computer' : 'browser'}</button>`).join('')}</div>
       <div class="cmp-opts">
         <label>Show <select id="c-stat">${STATS.map(x => opt(x.id, x.name, state.stat)).join('')}</select></label>
         <div class="seg" role="group" aria-label="Show scores as">${[['points', 'Points'], ['rel', '% of best'], ...(acct.on ? [['pct', 'Percentile']] : [])].map(([id, t]) => { const on = id === 'pct' ? P : id === 'rel' ? REL : !P && !REL; return `<button class="${on ? 'on' : ''}" data-act="unit" data-id="${id}" aria-pressed="${on}">${t}</button>`; }).join('')}</div>

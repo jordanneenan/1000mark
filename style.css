@@ -265,6 +265,7 @@ footer{font:400 11px var(--mono);text-transform:uppercase;letter-spacing:.08em;b
 
 /* compare table */
 .picker{display:flex;flex-wrap:wrap;gap:8px}
+.lb-controls+.picker{margin-top:14px}
 .picker .mini{padding:5px 9px;font-size:12px}
 .cmp-opts{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center;margin:14px 0 10px;font:700 12px var(--mono);text-transform:uppercase;letter-spacing:.06em}
 .cmp-opts label{display:inline-flex;align-items:center;gap:8px;cursor:pointer}
