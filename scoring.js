@@ -21,7 +21,7 @@ export const CATS = [
   { id: 'gpu', name: 'GPU speed', short: 'GPU', weight: 0.25, ink: 'pink', blurb: 'Graphics chip: number-crunching, drawing, moving data, and video encoding and decoding.' },
   { id: 'memory', name: 'Memory speed', short: 'Memory', weight: 0.15, ink: 'mint', blurb: 'How fast RAM can be filled, read, copied and jumped around in.' },
   { id: 'storage-speed', name: 'Storage speed', short: 'Storage', weight: 0.25, ink: 'ink', blurb: 'How fast the device can write and read files, in big streams and in small scattered pieces.' },
-  { id: 'capacity', name: 'Capacity', short: 'Size', weight: 0.10, ink: 'mint', blurb: 'How much memory and storage the computer has. Measured by the computer test only: a browser cannot see either.' },
+  { id: 'capacity', name: 'Capacity', short: 'Size', weight: 0.10, ink: 'sun', blurb: 'How much memory and storage the computer has. Measured by the computer test only: a browser cannot see either.' },
 ];
 
 // div turns the raw rate into the display unit. scale 'sqrt' is for sizes: four times the memory

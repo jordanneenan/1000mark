@@ -148,15 +148,17 @@ svg{display:block;width:100%;height:auto}
 
 /* progress */
 .progress{display:grid;gap:22px}
-.now{background:var(--sun);box-shadow:9px 9px 0 var(--pink)}
-.now h2{font-size:clamp(34px,6vw,72px);margin-top:6px}
-.steps{display:flex;flex-wrap:wrap;gap:5px;margin:16px 0 4px}
-.step{width:26px;height:34px;border:3px solid var(--line);background:var(--paper);display:block}
-.step.todo{background:var(--paper)}
-.step.done.ink-ink{background:var(--mark)}
-.step.fail{background:repeating-linear-gradient(45deg,var(--line) 0 3px,var(--paper) 3px 7px)}
-.step.doing{animation:blink .7s steps(2) infinite}
-@keyframes blink{50%{background:var(--surface)}}
+.now{background:var(--sun);box-shadow:9px 9px 0 var(--pink);display:grid;gap:16px;justify-items:start}
+.block.now>*{margin:0}
+.now h2{font-size:clamp(34px,6vw,72px)}
+.now-count{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;font:700 12px var(--mono);text-transform:uppercase;letter-spacing:.08em}
+.now-count b{font:400 clamp(28px,4vw,40px)/1 var(--display);letter-spacing:0;color:var(--on-spot)}
+.steps{display:flex;flex-wrap:wrap;gap:5px}
+.step{width:26px;height:34px;border:3px solid var(--on-spot);background:var(--paper);display:block}
+.step.done{background:var(--on-spot)}
+.step.fail{background:repeating-linear-gradient(45deg,var(--on-spot) 0 3px,var(--paper) 3px 7px)}
+.step.doing{background:var(--pink);animation:blink .7s steps(2) infinite}
+@keyframes blink{50%{background:var(--paper)}}
 @media (prefers-reduced-motion:reduce){.step.doing{animation:none}.btn:hover,a.stamp:hover{transform:none}}
 
 /* part pages */
@@ -249,7 +251,7 @@ footer{font:400 11px var(--mono);text-transform:uppercase;letter-spacing:.08em;b
 .cmd{display:block;font:700 13px var(--mono);background:var(--paper);border:3px solid var(--line);padding:8px 10px;margin:6px 0 10px;overflow-wrap:anywhere;user-select:all;white-space:pre-wrap}
 .dl{display:grid;align-content:start}
 .dl .sub{margin-top:10px}
-.dl .btn{justify-self:start;margin:6px 0 4px;overflow-wrap:anywhere;white-space:normal}
+.dl .btn{justify-self:start;margin:12px 0 4px;overflow-wrap:anywhere;white-space:normal}
 .dl.mine{box-shadow:9px 9px 0 var(--mint)}
 .steps-list{margin:8px 0 0;padding-left:22px;font-size:14px;display:grid;gap:4px}
 .steps-list.big{font-size:16px;gap:8px;margin:0}
@@ -362,3 +364,10 @@ select.mini{padding:2px 4px;cursor:pointer}
 .form select,.form textarea{font:700 15px var(--mono);color:var(--ink);background:var(--surface);border:4px solid var(--line);padding:10px;border-radius:0;width:100%;min-width:0}
 .form textarea{font:500 15px var(--body);resize:vertical}
 footer .foot-link{font:700 11px var(--mono);text-transform:uppercase;letter-spacing:.08em;margin-right:auto}
+
+/* Rhythm inside blocks: anything that follows text gets a clear gap, so copy never sits on a button,
+   command, table or chart. Headings keep their subtitle close (h2 + .sub stays at 4px). */
+.block>:where(*)+:where(p,.hint,.btns,.btn,.cmd,.table-wrap,table,.bars,svg,.steps-list,.kv,form,.fill,ol,ul,dl,.lanes-head,.form-row,label){margin-top:14px}
+.block>:where(.cmd)+:where(*){margin-top:4px}
+.block>:not(.slotrow)+.slotrow{margin-top:10px}
+td .tag+small{margin-top:6px}

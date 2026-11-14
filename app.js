@@ -1,4 +1,4 @@
-import { CATS, TESTS, REF_DEVICE, PROFILES, scoreRun, scoreTest } from './scoring.js';
+import { CATS, TESTS, REF_DEVICE, PROFILES, scoreRun, scoreTest, addSizes, ramGB } from './scoring.js';
 import { bars, radar, columns, lanes, esc, fmt, pts } from './charts.js';
 import { runGpu, glRenderer } from './tests/gpu.js';
 import { runMedia } from './tests/media.js';
@@ -13,7 +13,7 @@ const KEEP = 400;                                    // runs kept on this device
 const SITE_URL = 'https://1000mark.com';
 const REPO = 'https://github.com/jordanneenan/1000mark';
 const siteUrl = () => /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? SITE_URL : location.origin;
-const state = { runs: store.get('pressmark.runs', []), dev: null, cols: store.get('pressmark.cols', null), marks: store.get('pressmark.marks', { best: true, worst: true }), stat: store.get('pressmark.stat', 'latest'), pick: null, cmp: null, running: null, abort: false, device: null,
+const state = { runs: store.get('pressmark.runs', []).map(normalise), dev: null, cols: store.get('pressmark.cols', null), marks: store.get('pressmark.marks', { best: true, worst: true }), stat: store.get('pressmark.stat', 'latest'), pick: null, cmp: null, running: null, abort: false, device: null,
   label: store.get('pressmark.label', ''), unit: store.get('pressmark.unit', 'points'), vs: store.get('pressmark.vs', 'auto'), profile: store.get('pressmark.profile', 'general'), theme: store.get('pressmark.theme', null) };
 const msg = e => String(e && e.message || e);
 
@@ -140,7 +140,7 @@ const when = iso => new Date(iso).toLocaleString('en-AU', { day: 'numeric', mont
 // The native app saves raw per-second rates; convert them once to the display units the scoring uses.
 function normalise(r) {
   if (r.native && !r.norm) { for (const id of Object.keys(r.tests)) if (TESTS[id] && TESTS[id].div) r.tests[id] /= TESTS[id].div; r.norm = true; }
-  return r;
+  return addSizes(r);
 }
 
 // ---------- device ----------
@@ -246,7 +246,6 @@ function mast() {
 }
 
 const gb = bytes => { const g = bytes / 1e9; return g >= 1000 ? fmt(g / 1000) + ' TB' : fmt(g) + ' GB'; };
-const ramGB = bytes => { const g = bytes / 2 ** 30; return g >= 6 ? Math.round(g / 2) * 2 : Math.round(g); };   // installed size; the system reserves a little
 
 function deviceBlock(d, info = {}) {
   if (d.native) {
@@ -284,8 +283,9 @@ function progress() {
   const r = state.running, doneN = r.steps.filter(s => s.st === 'done' || s.st === 'fail').length;
   return `<section class="progress">
     <div class="label">Printing your results</div>
-    <div class="block now"><div class="sub">Test ${Math.min(doneN + 1, r.steps.length)} of ${r.steps.length}</div><h2 id="now">${esc(r.now)}</h2>
-      <div class="steps">${r.steps.map(s => `<span class="step ${s.st} ink-${catOf(s.cat).ink}" title="${esc(s.label)}"></span>`).join('')}</div>
+    <div class="block now" aria-live="polite"><h2 id="now">${esc(r.now)}</h2>
+      <div class="now-count"><b>${Math.min(doneN + 1, r.steps.length)} / ${r.steps.length}</b><span>${doneN} of ${r.steps.length} tests done</span></div>
+      <div class="steps" role="progressbar" aria-valuemin="0" aria-valuemax="${r.steps.length}" aria-valuenow="${doneN}">${r.steps.map(s => `<span class="step ${s.st}" title="${esc(s.label)}"></span>`).join('')}</div>
       <p class="hint">Leave this tab in front and avoid using the device until it finishes. Other work slows the tests down and lowers the score.</p>
       <button class="btn" data-act="cancel">Stop</button></div>
   </section>`;
@@ -310,8 +310,8 @@ function intro() {
     </section>
     <div class="label">What the browser can see</div>
     <div class="two-col">${deviceBlock(state.device)}
-      <div class="block"><h2>What gets tested</h2><div class="sub">Four parts, one system score</div>
-        ${CATS.map(c => `<div class="slotrow"><span class="nm">${esc(c.name)}</span><span class="tag">${Math.round(c.weight * 100)}% of system score</span><span class="ds">${esc(c.blurb)}</span></div>`).join('')}</div>
+      <div class="block"><h2>What gets tested</h2><div class="sub">Five parts, one system score</div>
+        ${CATS.map(c => `<div class="slotrow"><span class="nm">${esc(c.name)}</span><span class="tag">${c.id === 'capacity' ? 'Computer test only' : `${share(PROFILES[0], null, c.id)}% of system score`}</span><span class="ds">${esc(c.blurb)}</span></div>`).join('')}</div>
     </div>
   </section>`;
 }
@@ -329,6 +329,11 @@ function controls() {
   </section>${unitBar(selRun())}`;
 }
 
+// A part's share of the score, out of the parts this run has (all five when sc is null).
+const share = (pr, sc, id) => { const tot = CATS.reduce((a, c) => a + (!sc || sc.cats[c.id] ? pr.weights[c.id] : 0), 0); return Math.round(pr.weights[id] / tot * 100); };
+// Why a part has no score.
+const why = (run, c) => !run.native && c.id === 'capacity' ? 'Computer test only: a browser cannot see memory or drive sizes'
+  : !run.native && c.id === 'storage-speed' ? 'Not scored in a browser · see why →' : 'Could not be tested here';
 function stamps(sc, cmp, run, crun) {
   const pr = profile(), P = pctOn();
   if (P) {
@@ -336,13 +341,13 @@ function stamps(sc, cmp, run, crun) {
     return `<section class="stamps">
       <div class="stamp dark sys"><span class="n">${pc(sp)}</span><span class="l">${esc(pr.score)} percentile</span><span class="s">${sp == null ? 'Not enough results yet' : `Faster than ${Math.round(sp)}% of ${vsName(run)}`}${cmp && cp != null ? ` · compared device ${pc(cp)}` : ''}</span></div>
       ${CATS.map(c => { const p = pctile(run, ['c', c.id], sc.cats[c.id]), q = cmp && pctile(crun, ['c', c.id], cmp.cats[c.id]);
-        return `<a class="stamp sh-${c.ink}" href="#${c.id}"><span class="n">${pc(p)}</span><span class="l">${esc(c.name)}</span><span class="s">${!sc.cats[c.id] ? 'Could not be tested here' : p == null ? 'Not enough results yet' : `Faster than ${Math.round(p)}%${q != null ? ` · compared ${pc(q)}` : ''} · see tests →`}</span></a>`; }).join('')}
+        return `<a class="stamp sh-${c.ink}" href="#${c.id}"><span class="n">${pc(p)}</span><span class="l">${esc(c.name)}</span><span class="s">${!sc.cats[c.id] ? why(run, c) : p == null ? 'Not enough results yet' : `Faster than ${Math.round(p)}%${q != null ? ` · compared ${pc(q)}` : ''} · see tests →`}</span></a>`; }).join('')}
     </section>`;
   }
   const delta = (a, b) => b ? `<span class="s">${a >= b ? '+' : '−'}${Math.abs(Math.round((a / b - 1) * 100))}% vs compared device</span>` : '';
   return `<section class="stamps">
     <div class="stamp dark sys"><span class="n">${pts(sc.system)}</span><span class="l">${esc(pr.score)}</span>${cmp ? delta(sc.system, cmp.system) : `<span class="s">${pr.id === 'general' ? '1000 = reference machine' : esc(pr.blurb)}</span>`}</div>
-    ${CATS.map(c => `<a class="stamp sh-${c.ink}" href="#${c.id}"><span class="n">${pts(sc.cats[c.id])}</span><span class="l">${esc(c.name)}</span>${sc.cats[c.id] ? (cmp && cmp.cats[c.id] ? delta(sc.cats[c.id], cmp.cats[c.id]) : `<span class="s">${Math.round(pr.weights[c.id] * 100)}% of the score · see tests →</span>`) : '<span class="s">Could not be tested here</span>'}</a>`).join('')}
+    ${CATS.map(c => `<a class="stamp sh-${c.ink}" href="#${c.id}"><span class="n">${pts(sc.cats[c.id])}</span><span class="l">${esc(c.name)}</span>${sc.cats[c.id] ? (cmp && cmp.cats[c.id] ? delta(sc.cats[c.id], cmp.cats[c.id]) : `<span class="s">${share(pr, sc, c.id)}% of the score · see tests →</span>`) : `<span class="s">${why(run, c)}</span>`}</a>`).join('')}
   </section>`;
 }
 // Bar rows for a set of tests, in points or in percentiles.
@@ -524,12 +529,14 @@ function extras(cat, run, c) {
   if (d.native && cat.id === 'memory') return `<p class="foot-note">Tested on 256 MB blocks, far bigger than the processor's cache, so the numbers reflect the RAM itself. This machine has ${ramGB(d.memoryBytes)} GB of memory.</p>`;
   if (d.native && cat.id === 'storage-speed') {
     const used = i.quota ? i.usage / i.quota * 100 : 0;
-    return `<p class="foot-note">Tested with a ${gb(i.fileBytes || 0)} file of random data in ${esc(i.diskPath || '')}${i.disk ? `, on ${i.disk.name ? esc(i.disk.name) + ' ' : 'a '}(${esc(i.disk.fs)}, ${esc(i.disk.kind)}) volume` : ''}. ${i.direct ? 'The system cache was bypassed, so these are the drive\'s own speeds.' : 'This file system would not let the cache be bypassed, so reads may come from memory and flatter the drive.'} Random tests do one request at a time.</p>
+    return `<p class="foot-note">Tested with a ${gb(i.fileBytes || 0)} file of random data in ${esc(i.diskPath || '')}${i.disk ? `, on ${i.disk.name ? esc(i.disk.name) + ' ' : 'a '}(${esc(i.disk.fs)}, ${esc(i.disk.kind)}) volume` : ''}. ${i.direct ? 'The system cache was bypassed, so these are the drive\'s own speeds.' : 'This file system would not let the cache be bypassed, so reads may come from memory and flatter the drive.'} Big-file tests move 64 MB at a time; random tests do one 4K request at a time.</p>
       ${i.quota ? `<div class="label">The drive that was tested</div><section class="block"><div class="fill big"><i style="width:${used.toFixed(1)}%"></i></div>
-      <dl class="kv"><dt>Size</dt><dd>${gb(i.quota)}</dd><dt>Used</dt><dd>${gb(i.usage)} (${Math.round(used)}%)</dd><dt>Free</dt><dd>${gb(i.quota - i.usage)}</dd></dl><p class="hint">Size is shown, not scored: a bigger drive is not a faster one.</p></section>` : ''}`;
+      <dl class="kv"><dt>Size</dt><dd>${gb(i.quota)}</dd><dt>Used</dt><dd>${gb(i.usage)} (${Math.round(used)}%)</dd><dt>Free</dt><dd>${gb(i.quota - i.usage)}</dd></dl><p class="hint">The drive\'s size counts in the <a href="#capacity">Capacity</a> part, not here.</p></section>` : ''}`;
   }
   if (cat.id === 'memory') return `<p class="foot-note">Tested on a ${fmt((i.memBlock || 0) / 1048576)} MB block, much bigger than the processor's cache, so the numbers reflect the RAM itself. A browser cannot see how much memory is installed.</p>`;
-  if (cat.id === 'storage-speed') return `<p class="foot-note">Tested with a ${fmt((i.fileBytes || 0) / 1048576)} MB file of random data in the browser's private storage, which sits on the device's main drive. Reads straight after a write can come from memory instead of the drive, so read numbers flatter slow drives. A browser cannot see the drive's size.</p>`;
+  if (cat.id === 'storage-speed') return `<section class="block"><h2>Not scored in a browser</h2><p class="hint">These numbers come from a ${fmt((i.fileBytes || 0) / 1048576)} MB file in the browser's private storage. Browsers keep that storage in their own database and answer reads from memory, so they measure the browser more than the drive: in our own tests a laptop beat a desktop whose drive is much faster. They are shown here but left out of every score. <a href="#computer">The computer test</a> reads and writes the drive directly.</p></section>`;
+  if (cat.id === 'capacity' && d.native) return `<p class="foot-note">Four times the size scores twice the points, so size counts without drowning out speed. 1000 points is 32 GB of memory and a 4 TB drive. Only the drive that was tested counts.</p>`;
+  if (cat.id === 'capacity') return `<section class="block"><h2>Computer test only</h2><p class="hint">A browser cannot see how much memory is installed or how big the drive is, so browser runs have no Capacity score and their system score leaves it out. <a href="#computer">Run the computer test</a> to include it.</p></section>`;
   return '';
 }
 
@@ -539,7 +546,7 @@ function catPage(cat, run) {
   const groups = [...new Set(ids.map(id => TESTS[id].group))];
   return `${controls()}<nav class="crumbs"><a href="#home">← All results</a>${CATS.map(k => `<a href="#${k.id}" class="${k.id === cat.id ? 'on' : ''}">${esc(k.short)}</a>`).join('')}</nav>
     <section class="cat-head">
-      <div><h2 class="cat-title">${esc(cat.name)}</h2><p class="lede">${esc(cat.blurb)}</p><p class="sub">${esc(run.label)} · ${describe(run)} · ${Math.round(profile().weights[cat.id] * 100)}% of the ${esc(profile().score.toLowerCase())}</p></div>
+      <div><h2 class="cat-title">${esc(cat.name)}</h2><p class="lede">${esc(cat.blurb)}</p><p class="sub">${esc(run.label)} · ${describe(run)} · ${sc.cats[cat.id] ? `${share(profile(), sc, cat.id)}% of the ${esc(profile().score.toLowerCase())}` : esc(why(run, cat).replace(' · see why →', ''))}</p></div>
       ${pctOn() ? (() => { const p = pctile(run, ['c', cat.id], sc.cats[cat.id]); return `<div class="stamp dark sh-${cat.ink}"><span class="n">${pc(p)}</span><span class="l">${esc(cat.name)} percentile</span><span class="s">${p == null ? 'Not enough results yet' : `Faster than ${Math.round(p)}% of ${vsName(run)}`}</span></div>`; })()
         : `<div class="stamp dark sh-${cat.ink}"><span class="n">${pts(sc.cats[cat.id])}</span><span class="l">${esc(cat.name)} score</span><span class="s">${csc && csc.cats[cat.id] && sc.cats[cat.id] ? `${pts(csc.cats[cat.id])} on the compared device` : '1000 = reference machine'}</span></div>`}
     </section>

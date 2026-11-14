@@ -16,10 +16,13 @@ Colour roles (tokens in `style.css`): `--ink` text, `--line` rules and outlines,
 - No build step and no dependencies. `serve.py` serves the site alone (adds COOP/COEP headers).
 
 ## Rules that matter
-- Scores: test = 1000 × result / reference; part = geometric mean of its tests; system = weighted geometric mean of parts (weights in `scoring.js`). Scores are computed at display time from raw results.
+- Scores: test = 1000 × result / reference (square root of that ratio for sizes); part = geometric mean of its tests; system = weighted geometric mean of parts (weights in `scoring.js`). Scores are computed at display time from raw results.
 - The scale is frozen. Never change a reference value. A test that measures something new gets a new id with its own reference.
-- Four scored parts: CPU, GPU, memory, storage speed. Storage space and RAM size are shown for computer-test runs but never scored (a browser cannot see them).
+- Five scored parts: CPU, GPU, memory, storage speed and capacity. Capacity (RAM size `n_mem_size`, size of the tested drive `n_sto_total`) uses `scale: 'sqrt'` (four times the size, twice the points) and exists only in computer-test runs; `addSizes()` fills `n_mem_size` for runs from before 0.3. Browser storage tests are shown but not scored: browsers serve them from memory and their own databases, so they ranked drives backwards. A run's system score is the weighted mean of the parts it has.
 - The computer test prints each result with its points as it finishes. It computes them from `scoring.js` itself (embedded and parsed in `main.rs`, `Scorer`), so keep that file's one-test-per-line format.
+- Native storage: sequential tests move 64 MB per request (`n_sto_big_*`); the 4 MB versions (`n_sto_seq_*`) held fast NVMe drives back and stay only for old runs.
+- Native GPU shaders are created with `create_shader_module_trusted` and no runtime checks: on Metal wgpu otherwise bounds-checks every buffer read (matrix compute ran at a third of the browser's speed on an M1 Pro). Keep every shader's own bounds checks and loop limits.
+- `sha2` needs its `asm` feature on aarch64 or it ignores the CPU's SHA instructions.
 - GPU tests scale their batch until one batch takes about 40 ms (`loop()` in `tests/gpu.js`); a fixed small batch measures the round trip to the GPU, not the GPU.
 - Everything needs a secure context (https or localhost): OPFS, WebGPU, WebCodecs and crypto.subtle are blocked on plain http.
 - Runs are kept in localStorage (`pressmark.runs`), newest first, 400 kept; signed in, they also live in the account.
