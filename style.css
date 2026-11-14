@@ -277,6 +277,14 @@ footer{font:400 11px var(--mono);text-transform:uppercase;letter-spacing:.08em;b
 table.compare td span{display:inline-block;padding:2px 8px;border:3px solid transparent}
 table.compare td.best span,table.compare td.worst span{color:var(--on-spot);border-color:var(--on-spot)}
 table.compare th small{display:block;font:400 11px var(--mono);text-transform:none;letter-spacing:0;margin-top:2px}
+/* Each device's system score sits in its column head, which stays in view while the long table scrolls
+   (when the table fits the page; a wider one scrolls sideways instead, and a sticky head cannot work there). */
+table.compare thead th{vertical-align:bottom}
+table.compare th .hs{display:block;margin-top:6px;font:400 30px/1 var(--display);letter-spacing:.01em;text-transform:none}
+@media (min-width:900px){
+  .table-wrap.pin{overflow:visible}
+  .table-wrap.pin table.compare thead th{position:sticky;top:0;z-index:2;background:var(--surface);box-shadow:0 4px 0 var(--line)}
+}
 table.compare td.r{padding-right:10px;padding-left:10px;white-space:nowrap}
 table.compare tr.grp th{font-family:var(--display);font-weight:400;font-size:22px;letter-spacing:.02em;padding-top:18px}
 table.compare tr.big td{font-size:16px}
