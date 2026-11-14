@@ -4,7 +4,8 @@
 //!
 //! - Linux: the processor's energy counter (powercap/RAPL; some systems keep it for root), NVIDIA
 //!   through nvidia-smi, AMD through the card's hwmon sensor.
-//! - macOS on Apple silicon: the system's energy counters (IOReport, "Energy Model").
+//! - macOS on Apple silicon: the system's energy counters (IOReport, "Energy Model"). On macOS 27 only
+//!   the graphics chip's counter moves without admin rights; the processor's are frozen, so it is left out.
 //! - Windows: NVIDIA through nvidia-smi. Nothing reports processor power there without a driver.
 //!
 //! Everything is kept as joules counted up since the start, so the average power over any stretch
@@ -135,7 +136,9 @@ impl Power {
     /// Average watts since `m`: (processor, graphics chip), rounded to a tenth.
     pub fn since(&self, m: &Mark) -> (Option<f64>, Option<f64>) {
         let (c, g) = self.joules(); let s = m.at.elapsed().as_secs_f64().max(1e-3);
-        let w = |a: Option<f64>, b: Option<f64>| Some(((a? - b?) / s * 10.0).round() / 10.0).filter(|w| *w >= 0.0 && *w < 5000.0);
+        // A counter that has not moved is one the system will not let us read (macOS 27 freezes the
+        // processor's for programs without admin rights), so nothing is reported for it.
+        let w = |a: Option<f64>, b: Option<f64>| Some(((a? - b?) / s * 10.0).round() / 10.0).filter(|w| *w > 0.0 && *w < 5000.0);
         (w(c, m.cpu), w(g, m.gpu))
     }
 }

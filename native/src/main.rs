@@ -361,8 +361,8 @@ fn main() {
     // ---------- heat: how much speed is left once the computer is hot ----------
     let soak = if has("--heat") { Some(val("--minutes").and_then(|m| m.parse().ok()).unwrap_or(12u64)) } else { None };
     let heat = heat(&sc, g.as_ref(), &pw, threads, soak, started);
-    if !pw.cpu_source.is_empty() { watts.insert("cpuSource".into(), json!(pw.cpu_source)); }
-    if !pw.gpu_source.is_empty() { watts.insert("gpuSource".into(), json!(pw.gpu_source)); }
+    if !pw.cpu_source.is_empty() && watts.contains_key("cpuAll") { watts.insert("cpuSource".into(), json!(pw.cpu_source)); }
+    if !pw.gpu_source.is_empty() && watts.contains_key("gpu") { watts.insert("gpuSource".into(), json!(pw.gpu_source)); }
     print!("\r\x1b[2K");
     for (k, v) in &errors { println!("    ✗ {k}: {}", v.as_str().unwrap_or("")); }
     sc.summary();
