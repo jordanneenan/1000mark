@@ -278,7 +278,7 @@ fn main() {
     let disk_json: Vec<Value> = disks.iter().filter(|d| d.total_space() > 0).map(|d| json!({ "fs": d.file_system().to_string_lossy(), "kind": format!("{:?}", d.kind()), "total": d.total_space(), "free": d.available_space(), "removable": d.is_removable() })).collect();
     let here = disks.iter().filter(|d| dir.starts_with(d.mount_point())).max_by_key(|d| d.mount_point().as_os_str().len());
 
-    println!("\n  1000MARK {} · computer test\n  {cpu_name} · {cores} cores, {threads} threads · {:.0} GB RAM\n  Testing the drive that holds {shown_dir}\n  Leave the computer alone until it finishes (about four minutes; with --heat, about sixteen).", env!("CARGO_PKG_VERSION"), ram_gb(ram));
+    println!("\n  1000MARK {} · computer test\n  {cpu_name} · {cores} cores, {threads} threads · {:.0} GB RAM\n  Testing the drive that holds {shown_dir}\n  Leave the computer alone until it finishes (about three minutes; with --heat, about fifteen).", env!("CARGO_PKG_VERSION"), ram_gb(ram));
 
     // Stopped part-way (Ctrl+C, a closed terminal)? Do not leave the storage test's 4 GB file behind.
     { let tmp = dir.join(storage::TMP); let _ = ctrlc::set_handler(move || { let _ = std::fs::remove_dir_all(&tmp); println!("\n  Stopped."); std::process::exit(130); }); }
@@ -351,7 +351,7 @@ fn main() {
     sc.summary();
     if let (Some(c), Some(m)) = (heat["cpu"].as_f64(), heat["minutes"].as_f64()) {
         let gpu = heat["gpu"].as_f64().map(|g| format!(", the GPU {:.0}%", g * 100.0)).unwrap_or_default();
-        println!("  Heat: after {m:.0} minutes{} the CPU keeps {:.0}% of its speed{gpu}.{}\n", if soak.is_some() { " under full load" } else { " of testing" }, c * 100.0, if soak.is_some() { "" } else { "\n  Run with --heat for the 15-minute heat test." });
+        println!("  Heat: after {m:.0} minutes{} the CPU keeps {:.0}% of its speed{gpu}.{}\n", if soak.is_some() { " under full load" } else { " of testing" }, c * 100.0, if soak.is_some() { "" } else { "\n  Run with --heat for the full heat test (15 minutes)." });
     }
 
     // ---------- results ----------

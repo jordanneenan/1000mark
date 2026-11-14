@@ -352,7 +352,7 @@ function progress() {
     <div class="block now" aria-live="polite"><h2 id="now">${esc(r.now)}</h2>
       <div class="now-count"><b>${Math.min(doneN + 1, r.steps.length)} / ${r.steps.length}</b><span>${doneN} of ${r.steps.length} tests done</span></div>
       <div class="steps" role="progressbar" aria-valuemin="0" aria-valuemax="${r.steps.length}" aria-valuenow="${doneN}">${r.steps.map(s => `<span class="step ${s.st}" title="${esc(s.label)}"></span>`).join('')}</div>
-      <p class="hint">${r.video ? 'The computer test measures video through your browser. This takes about fifteen seconds; leave this tab in front.' : `Leave this tab in front and avoid using the device until it finishes${r.soak ? ` (about ${r.soak + 4} minutes)` : ' (about four minutes)'}. Other work slows the tests down and lowers the score.`}</p>
+      <p class="hint">${r.video ? 'The computer test measures video through your browser. This takes about fifteen seconds; leave this tab in front.' : `Leave this tab in front and avoid using the device until it finishes${r.soak ? ` (about ${r.soak + 3} minutes)` : ' (about three minutes)'}. Other work slows the tests down and lowers the score.`}</p>
       ${r.video ? '' : '<button class="btn" data-act="cancel">Stop</button>'}</div>
   </section>`;
 }
@@ -364,8 +364,8 @@ function intro() {
       <div class="block test-card">
         <span class="kicker">Nothing to install</span>
         <h2>Browser test</h2>
-        <p class="hint">Runs in this tab in about four minutes, with the same tests as the computer test as far as a browser allows. It shows how fast this device is through this browser. Works on phones and tablets too. Chrome, Edge and other Chromium browsers give the most complete results.</p>
-        <div class="btns"><button class="btn primary" data-act="run-full">Run browser test</button><button class="btn" data-act="run-heat">With heat test · ${SOAK + 4} min</button></div>
+        <p class="hint">Runs in this tab in about three minutes, with the same tests as the computer test as far as a browser allows. It shows how fast this device is through this browser. Works on phones and tablets too. Chrome, Edge and other Chromium browsers give the most complete results.</p>
+        <div class="btns"><button class="btn primary" data-act="run-full">Run browser test</button><button class="btn" data-act="run-heat">With heat test · ${SOAK + 3} min</button></div>
       </div>
       <div class="block test-card app">
         <span class="kicker">Windows · Mac · Linux</span>
@@ -456,7 +456,7 @@ function appPage() {
     <section class="cat-head"><div><h2 class="cat-title">Computer test</h2><p class="lede">The browser test can only see what the browser allows. The computer test is a small program you run from a terminal, and it reads the real hardware: every core, the actual graphics chip, the drive itself. Both run the same tests on the same scale, but a browser test measures the computer through that browser, so use the computer test to compare computers.</p></div></section>
     <div class="label">What happens when you run it</div>
     <section class="block"><ol class="steps-list big">
-      <li>It takes about four minutes. Leave the computer alone while it runs, and close anything busy first (a screensaver or a video is enough to lower the scores).</li>
+      <li>It takes about three minutes. Leave the computer alone while it runs, and close anything busy first (a screensaver or a video is enough to lower the scores).</li>
       <li>Each test is listed in the terminal with its result and points as it finishes, then the part scores and the system score.</li>
       <li>It opens this site with the results, and the page spends about fifteen seconds measuring video encoding and decoding through your browser, which completes the run. If you are signed in the results are saved to your account; if not, sign in or create an account and they are added to it.</li>
       <li>Add <code>--heat</code> to also load every core and the graphics chip for 12 minutes and measure how much speed is left once the computer is hot. Scores do not change; the result is shown beside them.</li>
@@ -580,7 +580,7 @@ function heatBlock(run) {
       <polyline points="${pts(1)}" class="hc-cpu"/>${h.gpu != null ? `<polyline points="${pts(2)}" class="hc-gpu"/>` : ''}</svg>
       <p class="hint">Speed through the ${h.soak} minutes, with every core and the graphics chip loaded together: yellow is the processor, pink the graphics chip.</p>` : '';
   return `<div class="label">Heat</div><section class="block">
-    <div class="lanes-head"><b>${h.mode === 'soak' ? `After ${h.soak} minutes at full load` : `After ${fmt(h.minutes)} minutes of testing`}</b><small>speed kept once warm</small></div>
+    <div class="lanes-head"><b>${h.mode === 'soak' ? `After ${h.soak} minutes at full load` : `After ${Math.max(1, Math.round(h.minutes))} minute${Math.round(h.minutes) > 1 ? 's' : ''} of testing`}</b><small>speed kept once warm</small></div>
     ${bars(rows, { ref: 100, max: 112, refText: '100% = no slowdown' })}${chart}
     <p class="hint">${h.mode === 'soak' ? 'The scores above come from short bursts on a cool device. This is how much of that speed is left after a long, heavy load. It does not change any score.' : `This is the short check at the end of the normal test. For the real thing, run the heat test: ${run.native ? 'add <code>--heat</code> when you run the computer test' : 'choose "With heat test" when you start the browser test'}. It loads everything for ${SOAK} minutes first, which is when thin laptops and phones slow down.`}</p></section>`;
 }
