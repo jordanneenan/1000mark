@@ -7,6 +7,8 @@ The code was called Pressmark before 2026-11-14, so internal names still say pre
 ## Look
 Three-ink screen print: cool grey paper, federal-blue key ink, fluoro pink, yellow and mint spot inks, flat blocks with hard offset shadows, dot screens, stamped squares ("lanes"), Anton for display type, Space Mono for labels, Archivo for text. Tokens are at the top of `style.css`. Keep it blocky: no rounded corners, no gradients except dot screens and hatching, no soft shadows.
 
+Width: the page runs to 1680px. From 1440px long bar lists (`.bars.many`, 12 rows or more) go two-up and the balance chart takes three fifths of its row; text blocks keep a 65-character measure. The balance chart (`radar()` in `charts.js`) is a fine-line instrument, not a stamp: thin doubling rings with four finer rings between each pair, a solid ring at 1000, a translucent shape. On phones it draws a compact version with two-line labels.
+
 Colour roles (tokens in `style.css`): `--ink` text, `--line` rules and outlines, `--paper` the sheet, `--surface` printed blocks, `--mark` data drawn in the key ink, `--on-spot` text printed on a spot colour, `--hero-*` the big score stamp, `--chip-*` filled tags, `--flood-*` / `--sh-*` / `--stamp-border` the part-score stamps. Dark mode follows printing on black stock: warm soft-black sheet, tone-on-tone panels, bone text ink, muted outlines, part-score stamps as solid floods with dark type, the system score as bare yellow type. Avoid thin bright outlines and near-white text in dark. Style components through these tokens only; never write a theme-specific component rule.
 
 ## Layout

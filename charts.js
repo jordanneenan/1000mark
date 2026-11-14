@@ -7,7 +7,7 @@ export const pts = v => v == null ? '–' : Math.round(v).toLocaleString('en-AU'
 export function bars(rows, { ref = null, max = null, cmpLabel = '', refText = '' } = {}) {
   const top = max || Math.max(ref ? ref * 1.5 : 0, ...rows.map(r => Math.max(r.value || 0, r.cmp || 0))) * 1.04 || 1;
   const pc = v => Math.max(0, Math.min(100, (v || 0) / top * 100)).toFixed(2);
-  return `<div class="bars">${rows.map(r => `
+  return `<div class="bars${rows.length >= 12 ? ' many' : ''}">${rows.map(r => `
     <div class="bar-row">
       <div class="bn">${esc(r.label)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</div>
       <div class="track">
@@ -23,31 +23,39 @@ export function bars(rows, { ref = null, max = null, cmpLabel = '', refText = ''
 
 // Radar of the part scores. items: [{label, value, cmp}]
 export function radar(items, cmpLabel = '') {
-  const W = 520, H = 380, cx = 260, cy = 196, R = 112, n = items.length;
-  // Log scale: each ring is double the one inside it, so one very high part cannot flatten the rest.
+  // On a phone the chart is drawn smaller with two-line labels, so the type stays readable.
+  const compact = typeof matchMedia === 'function' && matchMedia('(max-width: 620px)').matches;
+  const [W, H, cx, cy, R, gap] = compact ? [380, 384, 190, 196, 98, 14] : [760, 600, 380, 306, 215, 22], n = items.length;
+  // Log scale: each heavy ring is double the one inside it, so one very high part cannot flatten the rest.
+  // Four fine rings sit between each pair (fifths of the way, like log paper) so a score can be read off.
   const LOW = 125, hi = Math.max(2000, ...items.map(i => Math.max(i.value || 0, i.cmp || 0)));
   const top = LOW * 2 ** Math.ceil(Math.log2(hi / LOW));
-  const frac = v => Math.max(0.04, Math.min(1, Math.log2(Math.max(v || 0, LOW) / LOW) / Math.log2(top / LOW)));
+  const frac = v => Math.max(0.02, Math.min(1, Math.log2(Math.max(v || 0, LOW) / LOW) / Math.log2(top / LOW)));
   const pt = (i, v) => { const a = -Math.PI / 2 + i * 2 * Math.PI / n, r = R * frac(v); return [cx + Math.cos(a) * r, cy + Math.sin(a) * r]; };
   const poly = (key, v) => items.map((it, i) => pt(i, v ?? it[key]).map(x => x.toFixed(1)).join(',')).join(' ');
-  const rings = []; for (let v = LOW * 2; v <= top; v *= 2) rings.push(v);
+  const majors = [], minors = [];
+  for (let v = LOW * 2; v <= top; v *= 2) majors.push(v);
+  for (let v = LOW; v < top; v *= 2) for (let k = 1; k < 5; k++) minors.push(v * (1 + k / 5));
   const labels = items.map((it, i) => {
-    const a = -Math.PI / 2 + i * 2 * Math.PI / n, x = cx + Math.cos(a) * (R + 16), y = cy + Math.sin(a) * (R + 16);
+    const a = -Math.PI / 2 + i * 2 * Math.PI / n, x = (cx + Math.cos(a) * (R + gap)).toFixed(1), y = cy + Math.sin(a) * (R + gap);
     const anchor = Math.abs(Math.cos(a)) < 0.3 ? 'middle' : Math.cos(a) > 0 ? 'start' : 'end';
     const up = Math.sin(a) < -0.3, down = Math.sin(a) > 0.3;
-    return `<text x="${x.toFixed(1)}" y="${(y + (down ? 10 : up ? -24 : -8)).toFixed(1)}" text-anchor="${anchor}" class="rl">${esc(it.label)}</text>
-            <text x="${x.toFixed(1)}" y="${(y + (down ? 32 : up ? -2 : 14)).toFixed(1)}" text-anchor="${anchor}" class="rv">${pts(it.value)}</text>`;
+    const lines = compact ? it.label.split(' ') : [it.label], lh = 12, extra = (lines.length - 1) * lh;
+    // Label lines, then the score under them; the stack sits above, below or beside its corner.
+    const y0 = y + (down ? 14 : up ? -(compact ? 24 : 34) - extra : -8 - extra / 2);
+    return `${lines.map((l, k) => `<text x="${x}" y="${(y0 + k * lh).toFixed(1)}" text-anchor="${anchor}" class="rl">${esc(l)}</text>`).join('')}
+            <text x="${x}" y="${(y0 + extra + (compact ? 20 : 28)).toFixed(1)}" text-anchor="${anchor}" class="rv">${pts(it.value)}</text>`;
   }).join('');
-  return `<svg class="radar" viewBox="0 0 ${W} ${H}" role="img" aria-label="Balance of the part scores">
-    ${rings.map(v => `<polygon points="${poly(null, v)}" class="${v === 1000 ? 'ring ref' : 'ring'}"/>`).join('')}
+  return `<svg class="radar${compact ? ' compact' : ''}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Balance of the part scores: ${esc(items.map(i => `${i.label} ${pts(i.value)}`).join(', '))}">
+    ${minors.map(v => `<polygon points="${poly(null, v)}" class="ring minor"/>`).join('')}
+    ${majors.map(v => `<polygon points="${poly(null, v)}" class="${v === 1000 ? 'ring ref' : 'ring'}"/>`).join('')}
     ${items.map((_, i) => { const [x, y] = pt(i, top); return `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" class="axis"/>`; }).join('')}
-    <polygon points="${poly('value')}" class="shadow" transform="translate(6 6)"/>
     <polygon points="${poly('value')}" class="shape"/>
     ${items.some(i => i.cmp) ? `<polygon points="${poly('cmp')}" class="cmp"/>` : ''}
-    ${items.map((it, i) => { const [x, y] = pt(i, it.value); return `<rect x="${(x - 5).toFixed(1)}" y="${(y - 5).toFixed(1)}" width="10" height="10" class="dot"/>`; }).join('')}
+    ${items.map((it, i) => { const [x, y] = pt(i, it.value); return it.value ? `<rect x="${(x - 4).toFixed(1)}" y="${(y - 4).toFixed(1)}" width="8" height="8" class="dot"><title>${esc(it.label)}: ${pts(it.value)}</title></rect>` : ''; }).join('')}
     ${labels}
-    ${rings.map(v => `<text x="${cx + 4}" y="${(cy - R * frac(v) - 3).toFixed(1)}" class="rk">${v}</text>`).join('')}
-  </svg>${cmpLabel ? `<div class="bar-key"><span><u class="cmp-key"></u>${esc(cmpLabel)}</span></div>` : ''}`;
+    ${majors.map(v => `<text x="${cx + 6}" y="${(cy - R * frac(v) - 4).toFixed(1)}" class="rk">${v.toLocaleString('en-AU')}</text>`).join('')}
+  </svg><div class="bar-key"><span><b class="ring-key"></b>1,000 = reference machine. Each heavy ring is double the one inside it.</span>${cmpLabel ? `<span><u class="cmp-key"></u>${esc(cmpLabel)}</span>` : ''}</div>`;
 }
 
 // Column chart of system scores over past runs. runs: [{label, value, sel}] oldest first.

@@ -560,7 +560,7 @@ function dashboard(run) {
   const all = testBars(run, Object.keys(sc.tests), sc, c, csc, id => `${catOf(TESTS[id].cat).short} · ${TESTS[id].group}`).sort((a, b) => (b.value || 0) - (a.value || 0));
   return `${controls()}${stamps(sc, csc, run, c)}${submitBar()}
     <div class="label">Balance · ${esc(run.label)}, ${describe(run)}</div>
-    <section class="two-col">
+    <section class="two-col balance">
       <div class="block">${radar(axes.map(k => ({ label: k.name, value: sc.cats[k.id], cmp: csc && csc.cats[k.id] })), cmpLabel)}
         ${axes.length < CATS.length ? `<p class="hint">${CATS.filter(k => !axes.includes(k)).map(k => esc(k.name)).join(' and ')} ${CATS.length - axes.length > 1 ? 'are' : 'is'} left off: ${run.native ? 'not measured in this run' : 'only <a href="#computer">the computer test</a> measures them'}.</p>` : ''}</div>
       ${deviceBlock(run.device, run.info)}
