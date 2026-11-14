@@ -159,8 +159,9 @@ const heldFor = since => {
 let tips = [];
 // A username's best badge: one mark only. Hovering or focusing it shows the card, which lists the
 // badges of that tier and counts the rest (the account page lists them all).
-function badgesFor(user, { focus = true } = {}) {
-  const list = (lb.badges || {})[user]; if (!list || !list.length) return '';
+// With run, only the badges that run itself won (a leaderboard row shows the medal on the winning entry).
+function badgesFor(user, { focus = true, run = null } = {}) {
+  const list = ((lb.badges || {})[user] || []).filter(b => !run || b.run === run); if (!list.length) return '';
   const t = TIER_ORDER.find(x => list.some(b => b.tier === x)), items = list.filter(b => b.tier === t);
   const rest = TIER_ORDER.filter(x => x !== t).map(x => [x, list.filter(b => b.tier === x).length]).filter(([, n]) => n);
   tips.push({ user, tier: t, items, rest });
@@ -617,7 +618,7 @@ function leaderboardPage() {
   const opt = (v, t, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(t)}</option>`;
   const prof = PROFILES.find(p => p.id === lb.rank), cat = CATS.find(c => 'cat:' + c.id === lb.rank);
   const head = `<nav class="crumbs"><a href="#home">← Results</a></nav>
-    <section class="cat-head"><div><h2 class="cat-title">Leaderboard</h2><p class="lede">Runs people have chosen to share. Every score is on the same fixed scale, where 1000 is ${esc(REF_DEVICE)}. First places earn badges, shown beside the username; hover one to see why and for how long.</p></div></section>`;
+    <section class="cat-head"><div><h2 class="cat-title">Leaderboard</h2><p class="lede">Runs people have chosen to share. Every score is on the same fixed scale, where 1000 is ${esc(REF_DEVICE)}. First places earn badges, shown on the winning entry; hover one to see why and for how long.</p></div></section>`;
   if (!lb.entries) return head + `<p class="note y">${lb.error ? esc(lb.error) : 'Loading the leaderboard…'}</p>`;
   const scoreOf = e => { const s = scoreRun(e, prof || PROFILES[0]); return prof ? s.system : s.cats[cat.id]; };
   let rows = lb.entries.filter(e => e.kind === lb.kind).map(e => ({ e, v: scoreOf(e), parts: scoreRun(e).cats })).filter(x => x.v > 0).sort((a, b) => b.v - a.v);
@@ -631,7 +632,7 @@ function leaderboardPage() {
     </section>
     ${rows.length ? `<section class="block table-wrap"><table class="lb"><thead><tr><th class="r">#</th><th>Who</th><th>Hardware</th><th class="r">${esc(prof ? prof.score : cat.name)}</th>${CATS.map(c => `<th class="r part">${esc(c.short)}</th>`).join('')}<th></th></tr></thead><tbody>
       ${rows.map((x, i) => `<tr class="${x.e.mine ? 'mine' : ''}"><td class="r"><span class="rank r${i + 1}">${i + 1}</span></td>
-        <td><b>${esc(x.e.user)}</b>${badgesFor(x.e.user)}${x.e.mine ? ' <span class="tag used">You</span>' : ''}${x.e.review ? ' <span class="tag off" title="Much faster than other runs on the same chip. Only you can see it until it is checked.">Under review</span>' : ''}<small>${new Date(x.e.time).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</small></td>
+        <td><b>${esc(x.e.user)}</b>${badgesFor(x.e.user, { run: x.e.id })}${x.e.mine ? ' <span class="tag used">You</span>' : ''}${x.e.review ? ' <span class="tag off" title="Much faster than other runs on the same chip. Only you can see it until it is checked.">Under review</span>' : ''}<small>${new Date(x.e.time).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</small></td>
         <td>${esc(lbName(x.e))}<small>${esc([x.e.device.gpu, x.e.kind === 'app' ? x.e.device.os : x.e.device.browser].filter(Boolean).join(' · '))}</small></td>
         <td class="r score">${pts(x.v)}</td>${CATS.map(c => `<td class="r part">${pts(x.parts[c.id])}</td>`).join('')}
         <td>${x.e.mine ? `<button class="mini" data-act="lb-del" data-id="${esc(x.e.id)}">Remove</button>` : ''}</td></tr>`).join('')}
