@@ -1,6 +1,6 @@
-import { CATS, TESTS, REF_DEVICE, PROFILES, scoreRun, scoreTest, addSizes, ramGB } from './scoring.js?v=dev';
+import { SUITE, CATS, TESTS, REF_DEVICE, PROFILES, scoreRun, scoreTest, ramGB } from './scoring.js?v=dev';
 import { bars, radar, columns, lanes, esc, fmt, pts } from './charts.js?v=dev';
-import { runGpu, glRenderer } from './tests/gpu.js?v=dev';
+import { runGpu, gpuOnce, glRenderer } from './tests/gpu.js?v=dev';
 import { runMedia } from './tests/media.js?v=dev';
 
 const app = document.getElementById('app');
@@ -13,7 +13,11 @@ const KEEP = 400;                                    // runs kept on this device
 const SITE_URL = 'https://1000mark.com';
 const REPO = 'https://github.com/jordanneenan/1000mark';
 const siteUrl = () => /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? SITE_URL : location.origin;
-const state = { runs: store.get('pressmark.runs', []).map(normalise), dev: null, cols: store.get('pressmark.cols', null), marks: store.get('pressmark.marks', { best: true, worst: true }), stat: store.get('pressmark.stat', 'latest'), pick: null, cmp: null, running: null, abort: false, device: null,
+// Runs from before suite 1 used other tests and cannot be compared, so they are set aside (not deleted).
+const isCurrent = r => r && r.suite === SUITE;
+{ const all = store.get('pressmark.runs', []), old = all.filter(r => !isCurrent(r));
+  if (old.length) { store.set('pressmark.runs.pre1', [...store.get('pressmark.runs.pre1', []), ...old]); store.set('pressmark.runs', all.filter(isCurrent)); } }
+const state = { runs: store.get('pressmark.runs', []).map(normalise), old: store.get('pressmark.runs.pre1', []).length, showBrowser: store.get('pressmark.showBrowser', false), dev: null, cols: store.get('pressmark.cols', null), marks: store.get('pressmark.marks', { best: true, worst: true }), stat: store.get('pressmark.stat', 'latest'), pick: null, cmp: null, running: null, abort: false, device: null,
   label: store.get('pressmark.label', ''), unit: store.get('pressmark.unit', 'points'), vs: store.get('pressmark.vs', 'auto'), profile: store.get('pressmark.profile', 'general'), theme: store.get('pressmark.theme', null) };
 const msg = e => String(e && e.message || e);
 
@@ -40,7 +44,7 @@ const pushRuns = async runs => { if (!acct.user || !runs.length) return; try { f
 const dropRuns = async ids => { if (!acct.user || !ids.length) return; try { await api('runs/delete', 'POST', { ids }); } catch (e) { acct.note = `Not removed from your account: ${msg(e)}`; render(); } };
 // After signing in: take the account's runs, and add any made on this browser that the account lacks.
 async function pullAccount() {
-  const { runs } = await api('runs'); runs.forEach(normalise);
+  const got = (await api('runs')).runs, runs = got.filter(isCurrent); runs.forEach(normalise); state.old = Math.max(state.old, got.length - runs.length);
   const have = new Set(runs.map(r => r.id)), fresh = state.runs.filter(r => !have.has(r.id));
   state.runs = [...runs, ...fresh]; save();
   if (fresh.length) { await pushRuns(fresh); acct.note = `${fresh.length} run${fresh.length > 1 ? 's' : ''} from this browser ${fresh.length > 1 ? 'were' : 'was'} added to your account.`; }
@@ -50,7 +54,7 @@ async function pullAccount() {
 // The public leaderboard. Also tells the results page which of your runs are on it.
 async function loadBoard() {
   lb.loading = true;
-  try { const { entries } = await api('leaderboard'); lb.entries = entries.map(normalise); lb.error = ''; acct.board = new Set(entries.filter(e => e.mine).map(e => e.id)); }
+  try { const { entries } = await api('leaderboard'); lb.entries = entries.filter(isCurrent).map(normalise); lb.error = ''; acct.board = new Set(entries.filter(e => e.mine).map(e => e.id)); }
   catch (e) { lb.error = msg(e); }
   lb.loading = false;
 }
@@ -64,9 +68,14 @@ const save = () => store.set('pressmark.runs', state.runs);
 // because they are different tests.
 const STATS = [{ id: 'latest', name: 'Latest run' }, { id: 'avg', name: 'Average' }, { id: 'best', name: 'Best' }, { id: 'low', name: 'Lowest' }];
 const groupKey = r => `${r.label || 'Unnamed device'}|${r.native ? 'app' : 'browser'}`;
+// A browser test measures the computer through that browser, so browser runs stay out of the way
+// unless they are all there is, or the person switches them on.
+const hasApp = () => state.runs.some(r => r.native), hasBrowser = () => state.runs.some(r => !r.native);
+const browserOn = () => state.showBrowser || !hasApp();
+const browserToggle = () => hasApp() && hasBrowser() ? `<label class="chk"><input type="checkbox" id="show-browser" ${state.showBrowser ? 'checked' : ''}> Show browser tests</label>` : '';
 function groups() {
-  const m = new Map();
-  for (const r of [...state.runs].sort((a, b) => b.time.localeCompare(a.time))) {
+  const m = new Map(), on = browserOn();
+  for (const r of state.runs.filter(r => r.native || on).sort((a, b) => b.time.localeCompare(a.time))) {
     const key = groupKey(r);
     if (!m.has(key)) m.set(key, { key, label: r.label || 'Unnamed device', kind: r.native ? 'app' : 'browser', runs: [] });
     m.get(key).runs.push(r);
@@ -140,7 +149,7 @@ const when = iso => new Date(iso).toLocaleString('en-AU', { day: 'numeric', mont
 // The native app saves raw per-second rates; convert them once to the display units the scoring uses.
 function normalise(r) {
   if (r.native && !r.norm) { for (const id of Object.keys(r.tests)) if (TESTS[id] && TESTS[id].div) r.tests[id] /= TESTS[id].div; r.norm = true; }
-  return addSizes(r);
+  return r;
 }
 
 // ---------- device ----------
@@ -179,44 +188,76 @@ function call(w, data, onProgress) {
 }
 const worker = name => new Worker(new URL(`./tests/${name}.worker.js?v=dev`, import.meta.url));
 
-function buildSteps(rec, workers) {
-  const ms = 1000, quick = false, steps = [];
+// Every test is timed three times for MS and the middle result kept, so one hiccup cannot move it.
+const MS = 700, median = a => [...a].sort((x, y) => x - y)[a.length >> 1];
+const CPU_TESTS = ['zip', 'json', 'script', 'path', 'db', 'image', 'ray', 'physics', 'matrix', 'sort', 'crypto'];
+// One timing on some workers at once: their summed rate.
+const round = async (ws, ms) => (await Promise.all(ws.map(w => call(w, { cmd: 'time', ms })))).reduce((a, r) => a + r.rate, 0);
+async function measure(ws, test, bytes) {
+  await Promise.all(ws.map(w => call(w, { cmd: 'prep', test, bytes })));
+  const v = []; for (let i = 0; i < 3; i++) v.push(await round(ws, MS));
+  return median(v);
+}
+
+// Heat. Scores come from short bursts on a cool device. This times a few CPU and GPU tests again at
+// the end and reports the share of their speed that is left. With `minutes` it first loads every
+// core and the graphics chip for that long, sampling the speed as it goes. Scores never change.
+const HEAT_CPU = ['zip', 'physics', 'matrix'], HEAT_GPU = ['gpu_scene', 'gpu_rays'], SOAK = 12;
+async function heatTest(rec, ws, minutes, say, started) {
+  const series = [], gpu = rec.info.gpuApi === 'WebGPU';
+  if (minutes) {
+    await Promise.all(ws.map(w => call(w, { cmd: 'prep', test: 'matrix' })));
+    const t0 = performance.now(); let c0 = 0, g0 = 0;
+    while (performance.now() - t0 < minutes * 60000 && !state.abort) {
+      const [c, g] = await Promise.all([round(ws, 4000), gpu ? gpuOnce(['gpu_scene'], 4000).then(o => o.gpu_scene) : null]);
+      if (!c0) { c0 = c; g0 = g || 0; }
+      const el = Math.round((performance.now() - t0) / 1000), cr = c / c0, gr = g && g0 ? g / g0 : null;
+      series.push([el, +cr.toFixed(3), gr && +gr.toFixed(3)]);
+      say(`Heat test · ${Math.floor(el / 60)}:${String(el % 60).padStart(2, '0')} of ${minutes}:00 · CPU at ${Math.round(cr * 100)}%${gr ? `, GPU at ${Math.round(gr * 100)}%` : ''}`);
+    }
+  }
+  say('Heat · measuring again');
+  const geo = v => v.length ? +Math.exp(v.reduce((a, x) => a + Math.log(x), 0) / v.length).toFixed(3) : null, cr = [];
+  for (const t of HEAT_CPU) { const cold = rec.tests['ca_' + t]; if (!cold) continue; await Promise.all(ws.map(w => call(w, { cmd: 'prep', test: t }))); cr.push(await round(ws, MS) / TESTS['ca_' + t].div / cold); }
+  const hot = gpu ? await gpuOnce(HEAT_GPU, MS) : {};
+  return { mode: minutes ? 'soak' : 'end', soak: minutes || null, minutes: +((performance.now() - started) / 60000).toFixed(1), cpu: geo(cr), gpu: geo(HEAT_GPU.filter(id => hot[id] && rec.tests[id]).map(id => hot[id] / rec.tests[id])), series };
+}
+
+function buildSteps(rec, workers, soak) {
+  const quick = false, steps = [], started = performance.now();
   const put = (id, raw) => { rec.tests[id] = raw / (TESTS[id].div || 1); };
-  let cpu1, pool, mem;
-  for (const t of ['int', 'float', 'matrix', 'sort', 'sha', 'crypto', 'compress', 'json', 'bigint'])
-    steps.push({ id: 'cpu_' + t, cat: 'cpu', label: `CPU · ${TESTS['cpu_' + t].name.toLowerCase()} · one core`, run: async () => { cpu1 ||= workers.add(worker('cpu')); put('cpu_' + t, (await call(cpu1, { test: t, ms })).rate); } });
-  // Six threads: about as many as a game or a busy app keeps working (fewer if the device has fewer).
-  const pooled = () => (pool ||= Array.from({ length: state.device.cores }, () => workers.add(worker('cpu'))));
-  const six = Math.min(6, state.device.cores);
-  for (const t of ['int', 'float', 'matrix', 'sha'])
-    steps.push({ id: 'cpu_6t_' + t, cat: 'cpu', label: `CPU · ${TESTS['cpu_6t_' + t].name.toLowerCase()} · ${six} threads`, run: async () => {
-      const rs = await Promise.all(pooled().slice(0, six).map(w => call(w, { test: t, ms: ms * 1.5 }))); put('cpu_6t_' + t, rs.reduce((a, r) => a + r.rate, 0)); } });
-  for (const t of ['int', 'float', 'matrix', 'sha'])
-    steps.push({ id: 'cpu_mt_' + t, cat: 'cpu', label: `CPU · ${TESTS['cpu_mt_' + t].name.toLowerCase()} · all ${state.device.cores} threads`, run: async () => {
-      const rs = await Promise.all(pooled().map(w => call(w, { test: t, ms: ms * 1.5 }))); put('cpu_mt_' + t, rs.reduce((a, r) => a + r.rate, 0)); } });
-  const bytes = (state.device.memory && state.device.memory <= 2 ? 32 : 64) * 1048576;   // same block in quick and full, so they compare
-  for (const t of ['write', 'read', 'copy', 'random', 'alloc'])
-    steps.push({ id: 'mem_' + t, cat: 'memory', label: `Memory · ${TESTS['mem_' + t].name.toLowerCase()}`, run: async () => { mem ||= workers.add(worker('memory')); put('mem_' + t, (await call(mem, { test: t, ms, bytes })).rate); rec.info.memBlock = bytes; } });
+  const pool = [], pooled = n => { while (pool.length < n) pool.push(workers.add(worker('cpu'))); return pool.slice(0, n); };
+  // One core, six threads (about as many as a game or a busy app keeps working), then every thread.
+  const cores = state.device.cores, six = Math.min(6, cores);
+  for (const [pre, n, what] of [['c1', 1, 'one core'], ['c6', six, `${six} threads`], ['ca', cores, `all ${cores} threads`]])
+    for (const t of CPU_TESTS) { const id = `${pre}_${t}`; steps.push({ id, cat: 'cpu', label: `CPU · ${TESTS[id].name.toLowerCase()} · ${what}`, run: async () => put(id, await measure(pooled(n), t)) }); }
+  const bytes = (state.device.memory && state.device.memory <= 2 ? 32 : 64) * 1048576;
+  for (const t of ['fill', 'read', 'copy', 'chase', 'alloc'])
+    steps.push({ id: 'm_' + t, cat: 'memory', label: `Memory · ${TESTS['m_' + t].name.toLowerCase()}`, run: async () => { put('m_' + t, await measure(pooled(1), t, bytes)); rec.info.memBlock = bytes; } });
+  const per = Math.max(4, Math.min(16, Math.floor(256 / cores))) * 1048576;
+  steps.push({ id: 'm_copy_all', cat: 'memory', label: `Memory · copy on all ${cores} threads`, run: async () => { put('m_copy_all', await measure(pooled(cores), 'copy', per)); await Promise.all(pooled(cores).map(w => call(w, { cmd: 'free' }))); } });
   steps.push({ id: 'storage', cat: 'storage-speed', label: 'Storage', run: async (sub) => {
     const w = workers.add(worker('storage')); const r = await call(w, { quick }, sub);
     Object.assign(rec.tests, r.values); Object.assign(rec.errors, r.errors);
     rec.info.fileBytes = r.fileBytes; } });
   steps.push({ id: 'gpu', cat: 'gpu', label: 'GPU', run: async (sub) => {
-    const r = await runGpu({ ms, progress: sub }); Object.assign(rec.tests, r.values); Object.assign(rec.errors, r.errors);
+    const r = await runGpu({ ms: MS, progress: sub }); Object.assign(rec.tests, r.values); Object.assign(rec.errors, r.errors);
     rec.info.gpuApi = r.api; rec.info.gpuAdapter = r.adapter; } });
   steps.push({ id: 'video', cat: 'gpu', label: 'Video', run: async (sub) => {
     const r = await runMedia({ quick, progress: sub }); Object.assign(rec.tests, r.values); Object.assign(rec.errors, r.errors); rec.info.codecs = r.codecs; } });
+  steps.push({ id: 'heat', cat: 'cpu', label: soak ? `Heat test · ${soak} minutes at full load` : 'Heat · measuring again', run: async (sub) => { rec.heat = await heatTest(rec, pooled(cores), soak, sub, started); } });
   return steps;
 }
 
-async function run() {
+async function run(soak = 0) {
   if (state.running) return;
-  const rec = { id: Date.now().toString(36), time: new Date().toISOString(), mode: 'full', label: state.label || state.device.model || state.device.os, device: state.device, tests: {}, errors: {}, info: {} };
+  const rec = { id: Date.now().toString(36), suite: SUITE, time: new Date().toISOString(), mode: 'full', label: state.label || state.device.model || state.device.os, device: state.device, tests: {}, errors: {}, info: {} };
   const list = new Set(); const workers = { add: w => (list.add(w), w) };
-  const steps = buildSteps(rec, workers);
+  const steps = buildSteps(rec, workers, soak);
   state.abort = false;
-  state.running = { steps: steps.map(s => ({ label: s.label, cat: s.cat, st: 'todo' })), now: 'Starting' };
+  state.running = { steps: steps.map(s => ({ label: s.label, cat: s.cat, st: 'todo' })), now: 'Starting', soak };
   location.hash = ''; render();
+  let lock = null; try { lock = await navigator.wakeLock.request('screen'); } catch {}       // keep a phone's screen on
   for (let i = 0; i < steps.length && !state.abort; i++) {
     const s = steps[i], view = state.running.steps[i];
     view.st = 'doing'; state.running.now = s.label; render();
@@ -225,8 +266,27 @@ async function run() {
     await new Promise(r => setTimeout(r, 30));          // let the page breathe (and the CPU settle) between tests
   }
   for (const w of list) w.terminate();
-  if (!state.abort) { state.runs.unshift(rec); state.runs = state.runs.slice(0, KEEP); save(); state.dev = groupKey(rec); state.pick = null; pushRuns([rec]); }
+  if (lock) lock.release().catch(() => {});
+  if (!state.abort) {
+    state.runs.unshift(rec); state.runs = state.runs.slice(0, KEEP); save();
+    if (hasApp() && !state.showBrowser) { state.showBrowser = true; store.set('pressmark.showBrowser', true); }   // they asked for a browser test, so show it
+    state.dev = groupKey(rec); state.pick = null; pushRuns([rec]);
+  }
   state.running = null; location.hash = 'home'; render(); window.scrollTo(0, 0);
+}
+
+// The computer test has no video test of its own: video encoders are reached through the browser's
+// video engine, the same way the browser test does it. So when a computer-test run arrives here
+// without video results, this page measures them and adds them to the run.
+async function addVideo(r) {
+  if (!r.native || !isCurrent(r) || r.tests.vid_enc_h264 != null || r.info.videoVia || typeof VideoEncoder === 'undefined') return false;
+  state.running = { steps: [{ label: 'Video', cat: 'gpu', st: 'doing' }], now: 'Finishing the computer test · video', video: true }; render();
+  try {
+    const m = await runMedia({ quick: false, progress: label => { state.running.now = label; const el = document.getElementById('now'); if (el) el.textContent = label; } });
+    Object.assign(r.tests, m.values); Object.assign(r.errors, m.errors); r.info.codecs = m.codecs; r.info.videoVia = state.device.browser || 'browser';
+  } catch (e) { r.errors.video = msg(e); r.info.videoVia = 'failed'; }
+  state.running = null;
+  return true;
 }
 
 // ---------- pieces ----------
@@ -291,8 +351,8 @@ function progress() {
     <div class="block now" aria-live="polite"><h2 id="now">${esc(r.now)}</h2>
       <div class="now-count"><b>${Math.min(doneN + 1, r.steps.length)} / ${r.steps.length}</b><span>${doneN} of ${r.steps.length} tests done</span></div>
       <div class="steps" role="progressbar" aria-valuemin="0" aria-valuemax="${r.steps.length}" aria-valuenow="${doneN}">${r.steps.map(s => `<span class="step ${s.st}" title="${esc(s.label)}"></span>`).join('')}</div>
-      <p class="hint">Leave this tab in front and avoid using the device until it finishes. Other work slows the tests down and lowers the score.</p>
-      <button class="btn" data-act="cancel">Stop</button></div>
+      <p class="hint">${r.video ? 'The computer test measures video through your browser. This takes about fifteen seconds; leave this tab in front.' : `Leave this tab in front and avoid using the device until it finishes${r.soak ? ` (about ${r.soak + 4} minutes)` : ' (about four minutes)'}. Other work slows the tests down and lowers the score.`}</p>
+      ${r.video ? '' : '<button class="btn" data-act="cancel">Stop</button>'}</div>
   </section>`;
 }
 
@@ -303,13 +363,13 @@ function intro() {
       <div class="block test-card">
         <span class="kicker">Nothing to install</span>
         <h2>Browser test</h2>
-        <p class="hint">Runs in this tab in about a minute. It tests the CPU, graphics, memory and storage as far as the browser allows. Works on phones and tablets too. Chrome, Edge and other Chromium browsers give the most complete results.</p>
-        <div class="btns"><button class="btn primary" data-act="run-full">Run browser test</button></div>
+        <p class="hint">Runs in this tab in about four minutes, with the same tests as the computer test as far as a browser allows. It shows how fast this device is through this browser. Works on phones and tablets too. Chrome, Edge and other Chromium browsers give the most complete results.</p>
+        <div class="btns"><button class="btn primary" data-act="run-full">Run browser test</button><button class="btn" data-act="run-heat">With heat test · ${SOAK + 4} min</button></div>
       </div>
       <div class="block test-card app">
         <span class="kicker">Windows · Mac · Linux</span>
         <h2>Computer test</h2>
-        <p class="hint">A small download you run from a terminal. It names the real processor, graphics chip and drives, uses every core and tests the drive itself. It lists each result as it goes, then opens your results here.</p>
+        <p class="hint">A small download you run from a terminal. It names the real processor, graphics chip and drives, uses every core and tests the drive itself. It lists each result as it goes, then opens your results here. This is the one to use for comparing computers.</p>
         <div class="btns"><a class="btn primary" href="#computer">Run on your computer</a></div>
       </div>
     </section>
@@ -331,7 +391,7 @@ function controls() {
     <div><label for="c-dev">Test</label><select id="c-dev" ${d.sets.length < 2 ? 'disabled' : ''}>${d.sets.map(x => opt(x.key, `${kindName(x.kind)} · ${x.runs.length} run${x.runs.length > 1 ? 's' : ''}`, g.key)).join('')}</select></div>
     <div><label for="c-stat">Show</label><select id="c-stat">${state.pick ? opt('pick', 'One chosen run', 'pick') : ''}${STATS.map(x => opt(x.id, x.id === 'latest' ? x.name : `${x.name} of ${g.runs.length} run${many ? 's' : ''}`, state.pick ? 'pick' : state.stat)).join('')}</select></div>
     <div><label for="c-use">Use case</label><select id="c-use">${PROFILES.map(x => opt(x.id, x.name, profile().id)).join('')}</select></div>
-  </section>${unitBar(selRun())}`;
+  </section>${browserToggle() ? `<section class="lb-controls">${browserToggle()}</section>` : ''}${unitBar(selRun())}`;
 }
 
 // A part's share of the score, out of the parts this run has (all five when sc is null).
@@ -392,12 +452,13 @@ function appPage() {
     </div>`;
   };
   return `<nav class="crumbs"><a href="#home">← Results</a></nav>
-    <section class="cat-head"><div><h2 class="cat-title">Computer test</h2><p class="lede">The browser test can only see what the browser allows. The computer test is a small program you run from a terminal, and it reads the real hardware: every core, the actual graphics chip, the drive itself. Results land on the same scale, so the two can be compared.</p></div></section>
+    <section class="cat-head"><div><h2 class="cat-title">Computer test</h2><p class="lede">The browser test can only see what the browser allows. The computer test is a small program you run from a terminal, and it reads the real hardware: every core, the actual graphics chip, the drive itself. Both run the same tests on the same scale, but a browser test measures the computer through that browser, so use the computer test to compare computers.</p></div></section>
     <div class="label">What happens when you run it</div>
     <section class="block"><ol class="steps-list big">
-      <li>It takes about two minutes. Leave the computer alone while it runs.</li>
+      <li>It takes about four minutes. Leave the computer alone while it runs, and close anything busy first (a screensaver or a video is enough to lower the scores).</li>
       <li>Each test is listed in the terminal with its result and points as it finishes, then the part scores and the system score.</li>
-      <li>It opens this site with the results. If you are signed in they are saved to your account; if not, sign in or create an account and they are added to it.</li>
+      <li>It opens this site with the results, and the page spends about fifteen seconds measuring video encoding and decoding through your browser, which completes the run. If you are signed in the results are saved to your account; if not, sign in or create an account and they are added to it.</li>
+      <li>Add <code>--heat</code> to also load every core and the graphics chip for 12 minutes and measure how much speed is left once the computer is hot. Scores do not change; the result is shown beside them.</li>
       <li>It also saves the results as a file in the folder you ran it from, which you can load on the Devices page.</li>
     </ol></section>
     <div class="label">What it sends</div>
@@ -502,8 +563,25 @@ function dashboard(run) {
     </section>
     <div class="label">Every test, strongest first</div>
     <section class="block">${bars(all, barOpts(cmpLabel, run))}</section>
+    ${heatBlock(run)}
     ${runsBlock()}
     ${problems(run)}`;
+}
+
+// How much speed is left once the device is hot. Not part of any score.
+function heatBlock(run) {
+  const h = run.heat; if (!h || h.cpu == null) return '';
+  const pct = v => Math.round(v * 100) + '%', row = (label, v, ink) => ({ label, value: Math.min(v, 1.1) * 100, text: pct(v), note: 'of its cool speed', ink });
+  const rows = [row('Processor, all cores', h.cpu, 'sun')]; if (h.gpu != null) rows.push(row('Graphics chip', h.gpu, 'pink'));
+  const pts = k => h.series.filter(p => p[k] != null).map(p => `${(p[0] / (h.soak * 60) * 600).toFixed(1)},${(150 - (Math.max(0.4, Math.min(1.1, p[k])) - 0.4) / 0.7 * 140).toFixed(1)}`).join(' ');
+  const chart = h.mode === 'soak' && h.series && h.series.length > 2 ? `<svg class="heat-chart" viewBox="0 0 600 160" role="img" aria-label="Speed during the heat test, as a share of the speed at the start">
+      <line x1="0" x2="600" y1="30" y2="30" class="hc-ref"/><text x="596" y="24" text-anchor="end" class="hc-t">100%</text><text x="596" y="146" text-anchor="end" class="hc-t">40% · ${h.soak} min</text>
+      <polyline points="${pts(1)}" class="hc-cpu"/>${h.gpu != null ? `<polyline points="${pts(2)}" class="hc-gpu"/>` : ''}</svg>
+      <p class="hint">Speed through the ${h.soak} minutes, with every core and the graphics chip loaded together: yellow is the processor, pink the graphics chip.</p>` : '';
+  return `<div class="label">Heat</div><section class="block">
+    <div class="lanes-head"><b>${h.mode === 'soak' ? `After ${h.soak} minutes at full load` : `After ${fmt(h.minutes)} minutes of testing`}</b><small>speed kept once warm</small></div>
+    ${bars(rows, { ref: 100, max: 112, refText: '100% = no slowdown' })}${chart}
+    <p class="hint">${h.mode === 'soak' ? 'The scores above come from short bursts on a cool device. This is how much of that speed is left after a long, heavy load. It does not change any score.' : `This is the short check at the end of the normal test. For the real thing, run the heat test: ${run.native ? 'add <code>--heat</code> when you run the computer test' : 'choose "With heat test" when you start the browser test'}. It loads everything for ${SOAK} minutes first, which is when thin laptops and phones slow down.`}</p></section>`;
 }
 
 // ---------- part pages ----------
@@ -522,7 +600,7 @@ function extras(cat, run, c) {
     const tag = (hw, sw) => hw ? '<span class="tag used">Hardware</span>' : sw ? '<span class="tag">Software</span>' : '<span class="tag off">No</span>';
     const other = Object.entries(TESTS).filter(([id, x]) => x.cat === 'gpu' && x.unscored && t[id]).map(([id, x]) => ({ label: x.name, value: t[id], note: 'fps', ink: id.includes('_enc_') ? 'pink' : 'mint', cmp: c && c.tests[id] }));
     if (d.native) return `<div class="label">Graphics chip</div><section class="block"><h2>${esc(d.gpu || 'Not found')}</h2><div class="sub">${esc(i.gpuApi || '')} · ${esc(i.gpuKind || '')} · ${esc((i.gpuAdapter || '').split(' · ').slice(1).join(' · '))}</div>
-      <p class="hint">Compute, drawing, ray tracing and transfer were tested directly through ${esc((i.gpuApi || 'the graphics driver').replace(' (native)', ''))}. Video encoding and decoding are not in the computer test yet; the browser test covers them.</p>
+      <p class="hint">Compute, drawing, ray tracing and transfer were tested directly through ${esc((i.gpuApi || 'the graphics driver').replace(' (native)', ''))}. ${t.vid_enc_h264 != null ? `Video encoding and decoding were measured through ${esc(i.videoVia || 'the browser')} when the results opened, the same way the browser test does it.` : 'Video encoding and decoding are measured in the browser when the results page opens; this run was saved without that step, so it has no video results.'}</p>
       ${i.rayTracing ? `<p class="hint">${/^hardware/.test(i.rayTracing) ? 'The hardware ray-tracing test ran on the chip\'s ray-tracing units.' : 'No ray-tracing hardware was available to the test, so the compute result stands in for the hardware test. Either the chip has none, or the test cannot reach it yet: on Macs it cannot, even on M3 and later chips that have it, so treat this score as a lower bound there.'}</p>` : ''}</section>`;
     return `<div class="label">Graphics chip</div><section class="two-col">
       <div class="block"><h2>${esc(i.gpuApi || 'Not tested')}</h2><div class="sub">${esc(i.gpuAdapter || d.gpu || 'No adapter reported')}</div>
@@ -532,23 +610,23 @@ function extras(cat, run, c) {
     </section>
     ${other.length ? `<div class="label">Other codecs (shown, not scored)</div><section class="block">${bars(other)}</section>` : ''}`;
   }
-  if (d.native && cat.id === 'memory') return `<p class="foot-note">Tested on 256 MB blocks, far bigger than the processor's cache, so the numbers reflect the RAM itself. This machine has ${ramGB(d.memoryBytes)} GB of memory.</p>`;
+  if (d.native && cat.id === 'memory') return `<p class="foot-note">Tested on 256 MB blocks, far bigger than the processor's cache, so the numbers reflect the RAM itself. This machine has ${ramGB(d.memoryBytes)} GB of memory. Each test is timed three times and the middle result kept.</p>`;
   if (d.native && cat.id === 'storage-speed') {
     const used = i.quota ? i.usage / i.quota * 100 : 0;
-    return `<p class="foot-note">Tested with a ${gb(i.fileBytes || 0)} file of random data in ${esc(i.diskPath || '')}${i.disk ? `, on ${i.disk.name ? esc(i.disk.name) + ' ' : 'a '}(${esc(i.disk.fs)}, ${esc(i.disk.kind)}) volume` : ''}. ${i.direct ? 'The system cache was bypassed, so these are the drive\'s own speeds.' : 'This file system would not let the cache be bypassed, so reads may come from memory and flatter the drive.'} Big-file tests move 64 MB at a time; random tests do one 4K request at a time.</p>
+    return `<p class="foot-note">Tested with a ${gb(i.fileBytes || 0)} file of random data in ${esc(i.diskPath || '')}${i.disk ? `, on ${i.disk.name ? esc(i.disk.name) + ' ' : 'a '}(${esc(i.disk.fs)}, ${esc(i.disk.kind)}) volume` : ''}. ${i.direct ? 'The system cache was bypassed, so these are the drive\'s own speeds.' : 'This file system would not let the cache be bypassed, so reads may come from memory and flatter the drive.'} Big-file tests move 64 MB at a time. Random tests do one 4K request at a time (how quick the drive feels) and then 32 at once (a busy drive, where NVMe drives pull away). Each is timed three times and the middle result kept.</p>
       ${i.quota ? `<div class="label">The drive that was tested</div><section class="block"><div class="fill big"><i style="width:${used.toFixed(1)}%"></i></div>
       <dl class="kv"><dt>Size</dt><dd>${gb(i.quota)}</dd><dt>Used</dt><dd>${gb(i.usage)} (${Math.round(used)}%)</dd><dt>Free</dt><dd>${gb(i.quota - i.usage)}</dd></dl><p class="hint">The drive\'s size counts in the <a href="#capacity">Capacity</a> part, not here.</p></section>` : ''}`;
   }
   if (cat.id === 'memory') return `<p class="foot-note">Tested on a ${fmt((i.memBlock || 0) / 1048576)} MB block, much bigger than the processor's cache, so the numbers reflect the RAM itself. A browser cannot see how much memory is installed.</p>`;
   if (cat.id === 'storage-speed') return `<section class="block"><h2>Not scored in a browser</h2><p class="hint">These numbers come from a ${fmt((i.fileBytes || 0) / 1048576)} MB file in the browser's private storage. Browsers keep that storage in their own database and answer reads from memory, so they measure the browser more than the drive: in our own tests a laptop beat a desktop whose drive is much faster. They are shown here but left out of every score. <a href="#computer">The computer test</a> reads and writes the drive directly.</p></section>`;
   if (cat.id === 'capacity' && d.native) {
-    const SIZES = [['n_mem_size', 8, '8 GB'], ['n_mem_size', 16, '16 GB'], ['n_mem_size', 64, '64 GB'], ['n_mem_size', 256, '256 GB'], ['n_sto_total', 512, '512 GB drive'], ['n_sto_total', 16000, '16 TB drive']];
+    const SIZES = [['sz_ram', 8, '8 GB'], ['sz_ram', 16, '16 GB'], ['sz_ram', 64, '64 GB'], ['sz_ram', 256, '256 GB'], ['sz_vram', 4, '4 GB graphics'], ['sz_vram', 24, '24 GB graphics'], ['sz_drive', 512, '512 GB drive'], ['sz_drive', 16000, '16 TB drive']];
     const pts = (id, p) => t[id] ? fmt(scoreTest(id, t[id], p)) : '–';
-    return `<div class="label">How the sizes count</div><section class="block"><p class="hint">Size has diminishing returns, and where it stops helping depends on the use case. 32 GB of memory and a 4 TB drive score 1000 everywhere. Below 8 GB of memory points fall away fast, because the computer starts swapping to the drive. Games barely use more than 16 GB and gain nothing past 32 GB, while virtual machines, simulations, local AI models and a server's files keep using more, each doubling worth less than the last. Only the drive that was tested counts.</p>
-      <div class="table-wrap"><table><thead><tr><th>Use case</th><th class="r">This computer: ${t.n_mem_size ? Math.round(t.n_mem_size) + ' GB' : 'memory'}</th><th class="r">${t.n_sto_total ? gb(t.n_sto_total * 1e9) + ' drive' : 'Drive'}</th>${SIZES.map(([id, v, l]) => `<th class="r">${l}</th>`).join('')}</tr></thead><tbody>
-      ${PROFILES.map(p => `<tr${p.id === profile().id ? ' class="on"' : ''}><td>${esc(p.name)}</td><td class="r">${pts('n_mem_size', p)}</td><td class="r">${pts('n_sto_total', p)}</td>${SIZES.map(([id, v]) => `<td class="r">${fmt(scoreTest(id, v, p))}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;
+    return `<div class="label">How the sizes count</div><section class="block"><p class="hint">Size has diminishing returns, and where it stops helping depends on the use case. 32 GB of memory, 10 GB of graphics memory and a 4 TB drive score 1000 everywhere. Below 8 GB of memory points fall away fast, because the computer starts swapping to the drive. Games barely use more than 16 GB and gain nothing past 32 GB, while virtual machines, simulations, local AI models and a server's files keep using more, each doubling worth less than the last. Only the drive that was tested counts.${i.vramShared ? ' This graphics chip shares the system\'s memory, so half of it is counted as graphics memory.' : ''}</p>
+      <div class="table-wrap"><table><thead><tr><th>Use case</th><th class="r">This computer: ${t.sz_ram ? Math.round(t.sz_ram) + ' GB' : 'memory'}</th><th class="r">${t.sz_vram ? Math.round(t.sz_vram) + ' GB graphics' : 'Graphics'}</th><th class="r">${t.sz_drive ? gb(t.sz_drive * 1e9) + ' drive' : 'Drive'}</th>${SIZES.map(([id, v, l]) => `<th class="r">${l}</th>`).join('')}</tr></thead><tbody>
+      ${PROFILES.map(p => `<tr${p.id === profile().id ? ' class="on"' : ''}><td>${esc(p.name)}</td><td class="r">${pts('sz_ram', p)}</td><td class="r">${pts('sz_vram', p)}</td><td class="r">${pts('sz_drive', p)}</td>${SIZES.map(([id, v]) => `<td class="r">${fmt(scoreTest(id, v, p))}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;
   }
-  if (cat.id === 'capacity') return `<section class="block"><h2>Computer test only</h2><p class="hint">A browser cannot see how much memory is installed or how big the drive is, so browser runs have no Capacity score and their system score leaves it out. <a href="#computer">Run the computer test</a> to include it.</p></section>`;
+  if (cat.id === 'capacity') return `<section class="block"><h2>Computer test only</h2><p class="hint">A browser cannot see how much memory or graphics memory there is or how big the drive is, so browser runs have no Capacity score and their system score leaves it out. <a href="#computer">Run the computer test</a> to include it.</p></section>`;
   return '';
 }
 
@@ -566,7 +644,7 @@ function catPage(cat, run) {
     ${extras(cat, run, c)}
     <div class="label">The numbers</div>
     <section class="block table-wrap"><table><thead><tr><th>Test</th><th class="r">Result</th><th>Unit</th><th class="r">Points</th><th class="r">Reference</th></tr></thead><tbody>
-      ${Object.keys(TESTS).filter(id => TESTS[id].cat === cat.id && !TESTS[id].hidden && run.tests[id] != null).map(id => `<tr><td>${esc(TESTS[id].name)}<small>${esc(TESTS[id].group)}</small></td><td class="r">${fmt(run.tests[id])}</td><td>${esc(TESTS[id].unit)}</td><td class="r">${TESTS[id].unscored ? 'not scored' : pts(sc.tests[id])}</td><td class="r">${TESTS[id].ref ? fmt(TESTS[id].ref) : '–'}</td></tr>`).join('')}
+      ${Object.keys(TESTS).filter(id => TESTS[id].cat === cat.id && !TESTS[id].hidden && run.tests[id] != null).map(id => `<tr><td>${esc(TESTS[id].name)}<small>${esc(TESTS[id].group)}</small></td><td class="r">${fmt(run.tests[id])}</td><td>${esc(TESTS[id].unit)}</td><td class="r">${TESTS[id].unscored ? 'not scored' : pts(sc.tests[id])}</td><td class="r">${(run.native ? TESTS[id].ref : TESTS[id].bref) ? fmt(run.native ? TESTS[id].ref : TESTS[id].bref) : '–'}</td></tr>`).join('')}
     </tbody></table></section>
     ${problems({ ...run, errors: Object.fromEntries(Object.entries(run.errors || {}).filter(([k]) => (TESTS[k] ? TESTS[k].cat === cat.id : (cat.id === 'gpu' ? /gpu|gl|vid|video/.test(k) : cat.id.startsWith('storage') && /sto/.test(k))))) })}`;
 }
@@ -594,18 +672,23 @@ function devicesPage() {
       const vals = [], tips = [];
       for (const x of cols) {
         const id = Object.keys(x.run.tests).find(i => TESTS[i] && !TESTS[i].unscored && `${TESTS[i].group}|${TESTS[i].name}` === k);
-        vals.push(id ? conv(x.run, ['t', id], scoreTest(id, x.run.tests[id])) : null); tips.push(id ? `${fmt(x.run.tests[id])} ${TESTS[id].unit}` : '');
+        vals.push(id ? conv(x.run, ['t', id], scoreRun(x.run).tests[id]) : null); tips.push(id ? `${fmt(x.run.tests[id])} ${TESTS[id].unit}` : '');
       }
       return vals.some(v => v != null) ? { name: k.split('|')[1], sub: k.split('|')[0], vals, tips } : null;
     }).filter(Boolean);
     if (body.length) rows.push({ head: c.name }, ...body);
+  }
+  if (!P && cols.some(x => x.run.heat && x.run.heat.cpu != null)) {
+    const h = k => cols.map(x => x.run.heat && x.run.heat[k] != null && !x.run.agg ? Math.round(x.run.heat[k] * 100) : null);
+    rows.push({ head: 'Heat: speed kept once warm (latest run, not scored)' }, { name: 'Processor', sub: 'All cores', vals: h('cpu'), pct: true }, { name: 'Graphics chip', vals: h('gpu'), pct: true },
+      { name: 'Minutes of load', vals: cols.map(x => x.run.heat && !x.run.agg ? Math.round(x.run.heat.minutes) : null), plain: true });
   }
   const cell = (r, i) => {
     const v = r.vals[i], nums = r.vals.filter(x => x != null);
     if (v == null) return '<td class="r none">–</td>';
     const hi = Math.max(...nums), lo = Math.min(...nums), many = nums.length > 1 && hi !== lo;
     const cls = many && state.marks.best && v === hi ? 'best' : many && state.marks.worst && v === lo ? 'worst' : '';
-    return `<td class="r ${cls}" ${r.tips && r.tips[i] ? `title="${esc(r.tips[i])}"` : ''}><span>${P ? pc(v) : pts(v)}</span></td>`;
+    return `<td class="r ${cls}" ${r.tips && r.tips[i] ? `title="${esc(r.tips[i])}"` : ''}><span>${r.plain ? v : P || r.pct ? pc(v) : pts(v)}</span></td>`;
   };
   return `<nav class="crumbs"><a href="#home">← Results</a></nav>
     <section class="cat-head"><div><h2 class="cat-title">Devices</h2><p class="lede">Every device you have tested. Name them, and compare as many as you like side by side.</p></div></section>
@@ -628,6 +711,7 @@ function devicesPage() {
     </section>
     <div class="label">Compare</div>
     <section class="block">
+      ${browserToggle() ? `<div class="lb-controls">${browserToggle()}</div>` : ''}
       <div class="picker">${gs.map(g => `<button class="mini ${picked.includes(g) ? 'on' : ''}" data-act="col" data-id="${esc(g.key)}" aria-pressed="${picked.includes(g)}">${esc(g.label)} · ${g.kind}</button>`).join('')}</div>
       <div class="cmp-opts">
         <label>Show <select id="c-stat">${STATS.map(x => opt(x.id, x.name, state.stat)).join('')}</select></label>
@@ -638,12 +722,12 @@ function devicesPage() {
       </div>
       ${cols.length ? `<div class="table-wrap"><table class="compare"><thead><tr><th>${P ? 'Percentile' : 'Points'}</th>${cols.map(c => `<th class="r">${esc(c.g.label)}<small>${kindName(c.g.kind)}${c.run.agg ? ` · ${c.run.agg.n} runs` : ''}</small></th>`).join('')}</tr></thead><tbody>
         ${rows.map(r => r.head ? `<tr class="grp"><th colspan="${cols.length + 1}">${esc(r.head)}</th></tr>` : `<tr class="${r.big ? 'big' : ''}"><td>${esc(r.name)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</td>${r.vals.map((_, i) => cell(r, i)).join('')}</tr>`).join('')}
-      </tbody></table></div><p class="hint">1000 points = ${esc(REF_DEVICE)}. Hover a test's points to see the measured value. App and browser tests of the same kind share a row.</p>` : '<p class="hint">Pick at least one device above.</p>'}
+      </tbody></table></div><p class="hint">1000 points = ${esc(REF_DEVICE)}. Hover a test's points to see the measured value. Browser tests share rows with the computer test's, but they measure the computer through a browser: compare like with like.</p>` : '<p class="hint">Pick at least one device above.</p>'}
     </section>`;
 }
 
 // ---------- account pages ----------
-const notes = () => (acct.note ? `<p class="note y" role="status">${esc(acct.note)}</p>` : '') + (acct.busy ? `<p class="note" role="status">${esc(acct.busy)}</p>` : '');
+const notes = () => (state.old && !state.runs.length ? `<p class="note y" role="status">${state.old} earlier run${state.old > 1 ? 's were' : ' was'} made before suite 1.0, with different tests, and cannot be compared with new ones. Run the test again to replace ${state.old > 1 ? 'them' : 'it'}.</p>` : '') + (acct.note ? `<p class="note y" role="status">${esc(acct.note)}</p>` : '') + (acct.busy ? `<p class="note" role="status">${esc(acct.busy)}</p>` : '');
 // Sign in and create account are separate pages (password managers need one form per page),
 // drawn as one printed card with two stamped tabs so they read as a pair.
 function authPage(kind) {
@@ -789,6 +873,7 @@ app.addEventListener('click', e => {
   const act = b.dataset.act, id = b.dataset.id;
   const inGroup = key => state.runs.filter(r => groupKey(r) === key);
   if (act === 'run-full') run();
+  else if (act === 'run-heat') run(SOAK);
   else if (act === 'support-unlock') { acct.supportKind = 'unlock'; acct.note = ''; acct.supportSent = false; }
   else if (act === 'support-open') { acct.note = ''; acct.supportSent = false; }
   else if (act === 'unit') { state.unit = id; store.set('pressmark.unit', id); render(); }
@@ -837,6 +922,7 @@ app.addEventListener('change', async e => {
     for (const r of list) r.device = { ...r.device, formFactor: t.value };
     save(); pushRuns(list); render();
   }
+  if (t.id === 'show-browser') { state.showBrowser = t.checked; store.set('pressmark.showBrowser', t.checked); state.dev = null; state.pick = null; state.cmp = null; state.cols = null; render(); }
   if (t.id === 'lb-rank') { lb.rank = t.value; render(); }
   if (t.id === 'lb-dedupe') { lb.dedupe = t.checked; render(); }
   if (t.dataset.mark) { state.marks = { ...state.marks, [t.dataset.mark]: t.checked }; store.set('pressmark.marks', state.marks); render(); }
@@ -848,6 +934,7 @@ app.addEventListener('change', async e => {
     let last = null;
     for (const f of t.files) {
       try { const r = JSON.parse(await f.text()); if (!r.pressmark || !r.tests || !r.device) throw new Error('not a 1000Mark results file');
+        if (!isCurrent(r)) throw new Error('it was made before suite 1.0, with different tests');
         normalise(r); r.imported = true; if (state.runs.some(x => x.id === r.id)) continue;
         state.runs.push(r); last = r; pushRuns([r]); } catch (err) { alert(`${f.name} could not be loaded: ${msg(err)}`); }
     }
@@ -866,7 +953,7 @@ try { const r = await fetch('api/me', { credentials: 'same-origin' }); if (r.ok 
 // When this page is served by the Pressmark app, it offers the run it just made.
 try {
   const res = await fetch('native-run.json', { cache: 'no-store' });
-  if (res.ok) { const r = await res.json(); if (r && r.pressmark && r.tests) { normalise(r); state.runs = [r, ...state.runs.filter(x => x.id !== r.id)].slice(0, KEEP); save(); state.dev = groupKey(r); } }
+  if (res.ok) { const r = await res.json(); if (r && r.pressmark && r.tests && isCurrent(r)) { normalise(r); render(); await addVideo(r); state.runs = [r, ...state.runs.filter(x => x.id !== r.id)].slice(0, KEEP); save(); state.dev = groupKey(r); } }
 } catch {}
 // The app hands its results over through the site: #claim=TOKEN.
 const claim = /^#claim=([\w-]{16,})$/.exec(location.hash);
@@ -875,10 +962,13 @@ if (claim) {
   if (acct.on) {
     try {
       const r = normalise((await api('handoff/' + claim[1])).run);
+      if (!isCurrent(r)) throw new Error('That run came from an older version of the computer test, with different tests. Download the current one and run it again.');
+      render(); await addVideo(r);
       state.runs = [r, ...state.runs.filter(x => x.id !== r.id)].slice(0, KEEP); save();
       state.dev = groupKey(r); state.pick = null; state.cmp = null;
       if (!state.label) { state.label = r.label; store.set('pressmark.label', r.label); }
-      if (!acct.user) acct.note = 'These app results are kept in this browser for now. Sign in or create an account to save them to it.';
+      if (acct.user) await pushRuns([r]);
+      else acct.note = 'These computer test results are kept in this browser for now. Sign in or create an account to save them to it.';
     } catch (e) { acct.note = msg(e); }
   }
 }

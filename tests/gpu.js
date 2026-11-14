@@ -1,6 +1,9 @@
 // GPU tests. WebGPU where the browser has it (compute + render + transfer),
 // otherwise a smaller WebGL2 render-only fallback. Everything draws off-screen.
 const msg = e => String(e && e.message || e);
+// Every test is timed three times and the middle result kept.
+const median = a => [...a].sort((x, y) => x - y)[a.length >> 1];
+const thrice = async fn => median([await fn(), await fn(), await fn()]);
 const W = 1920, H = 1080;
 
 // batch(k) submits k units of work in one go, waits for the GPU to finish and returns how much
@@ -335,6 +338,29 @@ async function readback(d, ms) {
   return r / 1048576;
 }
 
+const GPU_TESTS = {
+  gpu_matmul: ['GPU · matrix compute', (d, ms) => matmul(d, ms)],
+  gpu_particles: ['GPU · particle compute', (d, ms) => particles(d, ms)],
+  gpu_fill: ['GPU · pixel shading', (d, ms) => render(d, ms, FILL, 4, true, 4 * W * H)],
+  gpu_geom: ['GPU · triangle throughput', (d, ms) => render(d, ms, GEOM, 400000, false, 400000)],
+  gpu_scene: ['GPU · game-like scene', (d, ms) => scene(d, ms)],
+  gpu_rays: ['GPU · ray tracing', (d, ms) => rays(d, ms)],
+  gpu_upload: ['GPU · upload', (d, ms) => upload(d, ms)],
+  gpu_readback: ['GPU · readback', (d, ms) => readback(d, ms)],
+};
+// For the heat test: time some tests once each, on a device of their own. Returns { id: value }.
+export async function gpuOnce(ids, ms) {
+  const out = {};
+  try {
+    const adapter = navigator.gpu && await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+    if (!adapter) return out;
+    const device = await adapter.requestDevice();
+    for (const id of ids) { try { out[id] = await GPU_TESTS[id][1](device, ms); } catch {} }
+    device.destroy();
+  } catch {}
+  return out;
+}
+
 async function runWebGPU(ms, out, progress) {
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) return false;
@@ -343,22 +369,12 @@ async function runWebGPU(ms, out, progress) {
   out.api = 'WebGPU';
   out.adapter = [info.vendor, info.architecture, info.device, info.description].filter(Boolean).join(' · ') || 'Unknown adapter';
   let lost = null; device.lost.then(i => { lost = i.message || 'GPU device lost'; });
-  const tests = [
-    ['gpu_matmul', 'GPU · matrix compute', () => matmul(device, ms)],
-    ['gpu_particles', 'GPU · particle compute', () => particles(device, ms)],
-    ['gpu_fill', 'GPU · pixel shading', () => render(device, ms, FILL, 4, true, 4 * W * H)],
-    ['gpu_geom', 'GPU · triangle throughput', () => render(device, ms, GEOM, 400000, false, 400000)],
-    ['gpu_scene', 'GPU · game-like scene', () => scene(device, ms)],
-    ['gpu_rays', 'GPU · ray tracing', () => rays(device, ms)],
-    ['gpu_upload', 'GPU · upload', () => upload(device, ms)],
-    ['gpu_readback', 'GPU · readback', () => readback(device, ms)],
-  ];
-  for (const [id, label, fn] of tests) {
+  for (const [id, [label, fn]] of Object.entries(GPU_TESTS)) {
     progress(label);
     if (lost) { out.errors[id] = lost; continue; }
     try {
       device.pushErrorScope('validation'); device.pushErrorScope('out-of-memory');
-      const v = await fn();
+      const v = await thrice(() => fn(device, ms));
       const oom = await device.popErrorScope(), val = await device.popErrorScope();
       if (oom || val) throw new Error((oom || val).message);
       out.values[id] = v;
@@ -425,13 +441,13 @@ async function runWebGL(ms, out, progress) {
   try {
     gl.useProgram(glProgram(gl, GL_FILL_VS, GL_FILL_FS));
     gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    out.values.gl_fill = await loop(ms, async k => { for (let i = 0; i < 4 * k; i++) gl.drawArrays(gl.TRIANGLES, 0, 3); sync(); await yieldUI(); return 4 * k * W * H; }, 256) / 1e6;
+    out.values.gl_fill = await thrice(() => loop(ms, async k => { for (let i = 0; i < 4 * k; i++) gl.drawArrays(gl.TRIANGLES, 0, 3); sync(); await yieldUI(); return 4 * k * W * H; }, 256)) / 1e6;
   } catch (e) { out.errors.gl_fill = msg(e); }
   progress('GPU · triangle throughput (WebGL)');
   try {
     gl.useProgram(glProgram(gl, GL_GEOM_VS, GL_GEOM_FS));
     gl.disable(gl.BLEND);
-    out.values.gl_geom = await loop(ms, async k => { for (let i = 0; i < k; i++) gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 200000); sync(); await yieldUI(); return k * 200000; }, 256) / 1e6;
+    out.values.gl_geom = await thrice(() => loop(ms, async k => { for (let i = 0; i < k; i++) gl.drawArraysInstanced(gl.TRIANGLES, 0, 3, 200000); sync(); await yieldUI(); return k * 200000; }, 256)) / 1e6;
   } catch (e) { out.errors.gl_geom = msg(e); }
   const lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext();
   return true;

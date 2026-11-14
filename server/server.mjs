@@ -134,7 +134,7 @@ const SECURITY = {
   'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'same-origin', 'X-Frame-Options': 'DENY',
   'Strict-Transport-Security': 'max-age=31536000',
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+  'Content-Security-Policy': "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
 };
 const send = (res, code, body, headers = {}) => { const text = JSON.stringify(body); res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...SECURITY, ...headers }); res.end(text); };
 function readJson(req, limit) {
@@ -182,7 +182,7 @@ function boardEntry(r) {
   const run = JSON.parse(cleanRun(r).data), d = run.device || {}, i = run.info || {};
   const str = (v, n = 120) => typeof v === 'string' ? v.slice(0, n) : '';
   const num = v => typeof v === 'number' && isFinite(v) ? v : null;
-  return { id: run.id, time: run.time, kind: run.native ? 'app' : 'browser', mode: str(run.mode, 10), norm: !!run.norm, native: !!run.native, tests: run.tests,
+  return { id: run.id, suite: run.suite, time: run.time, kind: run.native ? 'app' : 'browser', mode: str(run.mode, 10), norm: !!run.norm, native: !!run.native, tests: run.tests,
     device: { cpu: str(d.cpu), gpu: str(d.gpu || i.gpuAdapter), cores: num(d.cores), physCores: num(d.physCores), memoryBytes: num(d.memoryBytes), os: str(d.os, 60), arch: str(d.arch, 30), browser: str(d.browser, 60), model: d.native ? '' : str(d.model, 60), native: !!d.native },
     info: { gpuApi: str(i.gpuApi, 40), gpuAdapter: str(i.gpuAdapter) } };
 }
@@ -210,22 +210,27 @@ function saveRuns(userId, list) {
 
 // ---------- population: scored with the site's own scoring.js, cached for five minutes ----------
 const scoring = await import(new URL('file://' + path.join(SITE, 'scoring.js')).href);
-const rawTests = r => { const t = { ...r.tests }; if (r.native && !r.norm) for (const id of Object.keys(t)) if (scoring.TESTS[id]?.div) t[id] /= scoring.TESTS[id].div; return scoring.addSizes({ ...r, tests: t }).tests; };
+const rawTests = r => { const t = { ...r.tests }; if (r.native && !r.norm) for (const id of Object.keys(t)) if (scoring.TESTS[id]?.div) t[id] /= scoring.TESTS[id].div; return t; };
 
 // ---------- false scores ----------
 // Results are measured on the visitor's own device, so a determined person can always send made-up
 // numbers. These checks turn away the impossible ones, and the outlier check keeps runs far above
 // other runs on the same processor or graphics chip off the leaderboard and out of the percentiles.
 function implausible(r) {
-  const { TESTS, scoreTest, scoreRun } = scoring, tests = rawTests(r), ids = Object.keys(tests), d = r.device || {};
+  const { TESTS, scoreTest, scoreRun } = scoring, tests = rawTests(r), ids = Object.keys(tests), d = r.device || {}, browser = !r.native;
+  if (r.suite !== scoring.SUITE) return 'it was made before suite 1, with different tests';
   if (Date.parse(r.time) > Date.now() + 864e5) return 'it is dated in the future';
-  if (r.native ? ids.some(id => TESTS[id] && !/^(n_|gpu_)/.test(id)) : ids.some(id => id.startsWith('n_'))) return 'it mixes results from the browser test and the computer test';
+  if (browser ? ids.some(id => /^(s_|sz_|gpu_rt)/.test(id)) : ids.some(id => /^(sto_|gl_)/.test(id))) return 'it mixes results from the browser test and the computer test';
   const cores = d.cores; if (!Number.isInteger(cores) || cores < 1 || cores > 1024) return 'the thread count is not believable';
-  for (const id of ids) { const p = scoreTest(id, tests[id]); if (p != null && p > 25000) return `${TESTS[id].name} is over 25 times the reference machine`; }
-  for (const id of ids) { const t = TESTS[id]; if (t && t.pair && tests[t.pair] > 0 && tests[id] / tests[t.pair] > cores * 1.3) return `${t.name} on all cores is faster than ${cores} threads could be`; }
-  for (const id of ids) { const one = id.replace('_6t_', '_'); if (one !== id && tests[one] > 0 && tests[id] / tests[one] > Math.min(6, cores) * 1.3) return `${TESTS[id] ? TESTS[id].name : id} on six threads is faster than ${Math.min(6, cores)} threads could be`; }
-  if (tests.n_mem_size != null && (!(d.memoryBytes > 0) || Math.abs(tests.n_mem_size - scoring.ramGB(d.memoryBytes)) > 2 || tests.n_mem_size > 4096)) return 'the memory size does not match the computer';
-  if (tests.n_sto_total > 500000) return 'the drive size is not believable';
+  for (const id of ids) { const p = scoreTest(id, tests[id], undefined, browser); if (p != null && p > 25000) return `${TESTS[id].name} is over 25 times the reference machine`; }
+  for (const id of ids) {
+    const t = TESTS[id], one = tests['c1_' + id.slice(3)]; if (!t || !(one > 0)) continue;
+    if (id.startsWith('ca_') && tests[id] / one > cores * 1.3) return `${t.name} on all cores is faster than ${cores} threads could be`;
+    if (id.startsWith('c6_') && tests[id] / one > Math.min(6, cores) * 1.3) return `${t.name} on six threads is faster than ${Math.min(6, cores)} threads could be`;
+  }
+  if (tests.sz_ram != null && (!(d.memoryBytes > 0) || Math.abs(tests.sz_ram - scoring.ramGB(d.memoryBytes)) > 2 || tests.sz_ram > 4096)) return 'the memory size does not match the computer';
+  if (tests.sz_drive > 500000) return 'the drive size is not believable';
+  if (tests.sz_vram > 2048 || (tests.sz_vram > 0 && tests.sz_ram > 0 && r.info && r.info.vramShared && tests.sz_vram > tests.sz_ram)) return 'the graphics memory is not believable';
   const sys = scoreRun({ ...r, tests }).system; if (!sys) return 'it has no scored results';
   if (sys > 12000) return 'the system score is over 12 times the reference machine';
   return '';
@@ -263,7 +268,7 @@ async function population() {
     const r = run, tests = run.tests, base = scoreRun(run);
     if (!base.system) continue;
     const round = v => v == null ? undefined : Math.round(v * 10) / 10;
-    const t = {}; for (const [id, v] of Object.entries(tests)) { const sc = scoreTest(id, v); if (sc != null) t[id] = round(sc); }
+    const t = {}; for (const [id, v] of Object.entries(tests)) { const sc = scoreTest(id, v, undefined, !r.native); if (sc != null) t[id] = round(sc); }
     rows.push({ k: r.native ? 'app' : 'browser', f: r.device?.formFactor || (r.native ? 'computer' : 'computer'),
       s: Object.fromEntries(PROFILES.map(p => [p.id, round(scoreRun(run, p).system)])), c: Object.fromEntries(Object.entries(base.cats).map(([k, v]) => [k, round(v)])), t });
   }
@@ -377,7 +382,7 @@ async function api(req, res, route) {
       boardCache = { until: Date.now() + 30e3, rows: rows.map((r, i) => ({ ...r, review: odd.has(i) })) };
     }
     // Entries held back as outliers are shown only to their owner, marked as under review.
-    return send(res, 200, { entries: boardCache.rows.filter(r => !r.review || (me && me.id === r.uid)).map(r => ({ ...r.e, mine: !!me && me.id === r.uid, review: r.review })) });
+    return send(res, 200, { entries: boardCache.rows.filter(r => r.e.suite === scoring.SUITE).filter(r => !r.review || (me && me.id === r.uid)).map(r => ({ ...r.e, mine: !!me && me.id === r.uid, review: r.review })) });
   }
 
   // Support requests (for example, to unlock an account). Stored with the email encrypted; read with
@@ -463,8 +468,8 @@ async function api(req, res, route) {
 }
 
 // ---------- static site ----------
-const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.exe': 'application/octet-stream', '': 'application/octet-stream' };
-const ALLOWED = /^\/(index\.html|style\.css|app\.js|charts\.js|scoring\.js|icon\.svg|manifest\.webmanifest|tests\/[\w.-]+\.js|downloads\/[\w.-]+)$/;
+const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.svg': 'image/svg+xml', '.wasm': 'application/wasm', '.webmanifest': 'application/manifest+json', '.exe': 'application/octet-stream', '': 'application/octet-stream' };
+const ALLOWED = /^\/(index\.html|style\.css|app\.js|charts\.js|scoring\.js|icon\.svg|manifest\.webmanifest|tests\/[\w.-]+\.(?:js|wasm)|downloads\/[\w.-]+)$/;
 function serveFile(req, res, urlPath) {
   const p = urlPath === '/' ? '/index.html' : urlPath;
   if (!ALLOWED.test(p)) { res.writeHead(404, { 'Content-Type': 'text/plain' }); return res.end('Not found'); }

@@ -1,10 +1,14 @@
 [package]
 name = "pressmark"
-version = "0.4.0"
+version = "1.0.0"
 edition = "2021"
 description = "1000Mark computer test: tests the CPU, GPU, memory and storage directly and shows the results in the browser."
 
+[workspace]
+members = ["kernels"]
+
 [dependencies]
+kernels = { path = "kernels" }
 sysinfo = "0.33"
 wgpu = "24"
 pollster = "0.4"

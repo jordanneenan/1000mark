@@ -11,20 +11,20 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use sysinfo::{Disks, System};
 
-const SITE: &[(&str, &str, &str)] = &[
-    ("/", "text/html; charset=utf-8", include_str!("../../index.html")),
-    ("/index.html", "text/html; charset=utf-8", include_str!("../../index.html")),
-    ("/style.css", "text/css; charset=utf-8", include_str!("../../style.css")),
-    ("/app.js", "text/javascript; charset=utf-8", include_str!("../../app.js")),
-    ("/charts.js", "text/javascript; charset=utf-8", include_str!("../../charts.js")),
-    ("/scoring.js", "text/javascript; charset=utf-8", include_str!("../../scoring.js")),
-    ("/icon.svg", "image/svg+xml", include_str!("../../icon.svg")),
-    ("/manifest.webmanifest", "application/manifest+json", include_str!("../../manifest.webmanifest")),
-    ("/tests/cpu.worker.js", "text/javascript; charset=utf-8", include_str!("../../tests/cpu.worker.js")),
-    ("/tests/memory.worker.js", "text/javascript; charset=utf-8", include_str!("../../tests/memory.worker.js")),
-    ("/tests/storage.worker.js", "text/javascript; charset=utf-8", include_str!("../../tests/storage.worker.js")),
-    ("/tests/gpu.js", "text/javascript; charset=utf-8", include_str!("../../tests/gpu.js")),
-    ("/tests/media.js", "text/javascript; charset=utf-8", include_str!("../../tests/media.js")),
+const SITE: &[(&str, &str, &[u8])] = &[
+    ("/", "text/html; charset=utf-8", include_bytes!("../../index.html")),
+    ("/index.html", "text/html; charset=utf-8", include_bytes!("../../index.html")),
+    ("/style.css", "text/css; charset=utf-8", include_bytes!("../../style.css")),
+    ("/app.js", "text/javascript; charset=utf-8", include_bytes!("../../app.js")),
+    ("/charts.js", "text/javascript; charset=utf-8", include_bytes!("../../charts.js")),
+    ("/scoring.js", "text/javascript; charset=utf-8", include_bytes!("../../scoring.js")),
+    ("/icon.svg", "image/svg+xml", include_bytes!("../../icon.svg")),
+    ("/manifest.webmanifest", "application/manifest+json", include_bytes!("../../manifest.webmanifest")),
+    ("/tests/cpu.worker.js", "text/javascript; charset=utf-8", include_bytes!("../../tests/cpu.worker.js")),
+    ("/tests/kernels.wasm", "application/wasm", include_bytes!("../../tests/kernels.wasm")),
+    ("/tests/storage.worker.js", "text/javascript; charset=utf-8", include_bytes!("../../tests/storage.worker.js")),
+    ("/tests/gpu.js", "text/javascript; charset=utf-8", include_bytes!("../../tests/gpu.js")),
+    ("/tests/media.js", "text/javascript; charset=utf-8", include_bytes!("../../tests/media.js")),
 ];
 
 fn iso_now() -> (String, u64) {
@@ -201,12 +201,45 @@ fn handoff(text: &str, server: &str) -> Result<String, String> {
     }
 }
 
+/// Heat. The scores above come from short bursts on a cool machine. This runs a few CPU and GPU
+/// tests again at the end and reports the share of their speed that is left. With `soak` it first
+/// loads every core and the graphics chip for that many minutes, sampling the speed as it goes, so
+/// a machine that slows down when hot shows it. Scores never change: this is reported beside them.
+const HEAT_CPU: &[&str] = &["zip", "physics", "matrix"];
+const HEAT_GPU: &[&str] = &["gpu_scene", "gpu_rays"];
+fn heat(sc: &Scorer, g: Option<&gpu::Gpu>, threads: usize, soak: Option<u64>, started: std::time::Instant) -> Value {
+    let cold = |id: &str| sc.got.iter().find(|(k, _)| k == id).map(|(_, v)| *v).filter(|v| *v > 0.0);
+    let mut series: Vec<Value> = Vec::new();
+    if let Some(minutes) = soak {
+        let t0 = std::time::Instant::now(); let (mut c0, mut g0) = (0.0, 0.0);
+        while t0.elapsed().as_secs() < minutes * 60 {
+            let (c, gf) = std::thread::scope(|s| {
+                let hs: Vec<_> = (0..threads).map(|_| s.spawn(|| { let mut w = cpu::make("matrix"); cpu::timed(4000, &mut *w) })).collect();
+                let gf = g.and_then(|g| g.once("gpu_scene", 4000).ok());
+                (hs.into_iter().map(|h| h.join().unwrap_or(0.0)).sum::<f64>(), gf)
+            });
+            if c0 == 0.0 { c0 = c; g0 = gf.unwrap_or(0.0); }
+            let (cr, gr) = (c / c0, gf.filter(|_| g0 > 0.0).map(|x| x / g0));
+            let el = t0.elapsed().as_secs();
+            series.push(json!([el, (cr * 1000.0).round() / 1000.0, gr.map(|x| (x * 1000.0).round() / 1000.0)]));
+            say(&format!("Heat test · {}:{:02} of {minutes}:00 · CPU at {:.0}%{}", el / 60, el % 60, cr * 100.0, gr.map(|x| format!(", GPU at {:.0}%", x * 100.0)).unwrap_or_default()));
+        }
+    }
+    say("Heat · measuring again");
+    let geo = |v: Vec<f64>| if v.is_empty() { None } else { Some(((v.iter().map(|x| x.ln()).sum::<f64>() / v.len() as f64).exp() * 1000.0).round() / 1000.0) };
+    let cpu_r = geo(HEAT_CPU.iter().filter_map(|t| { let c = cold(&format!("ca_{t}"))?; let t: &'static str = t; Some(cpu::multi(t, 400, threads) / c) }).collect());
+    let gpu_r = geo(HEAT_GPU.iter().filter_map(|id| { let c = cold(id)?; Some(g?.once(id, 700).ok()? / c) }).collect());
+    json!({ "mode": if soak.is_some() { "soak" } else { "end" }, "soak": soak, "minutes": (started.elapsed().as_secs_f64() / 6.0).round() / 10.0, "cpu": cpu_r, "gpu": gpu_r, "series": series })
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let has = |f: &str| args.iter().any(|a| a == f);
     let val = |f: &str| args.iter().position(|a| a == f).and_then(|i| args.get(i + 1)).cloned();
     if has("--help") || has("-h") {
-        println!("1000Mark {}\n\nTests this computer, lists each result as it finishes, then opens the results page.\n\n  --name NAME    what to call this device (default: named after its processor)\n  --dir PATH     folder on the drive to test (default: your home folder)\n  --server URL   the 1000Mark site to show results on (default {DEFAULT_SERVER})\n  --local        show the results on this computer only, without sending them to the site\n  --show-data    print exactly what is sent before sending it\n  --no-open      do not open the browser\n  --connect KEY  send every run straight to your account (key from the account page)\n  --disconnect   stop sending runs to an account\n  --json-only    save the results file and exit\n  --port N       port for the local results page (default 4174)", env!("CARGO_PKG_VERSION"));
+        println!("1000Mark {}\n\nTests this computer, lists each result as it finishes, then opens the results page.\n\n  --name NAME    what to call this device (default: named after its processor)\n  --dir PATH     folder on the drive to test (default: your home folder)\n  --server URL   the 1000Mark site to show results on (default {DEFAULT_SERVER})\n  --local        show the results on this computer only, without sending them to the site\n  --show-data    print exactly what is sent before sending it\n  --no-open      do not open the browser\n  --connect KEY  send every run straight to your account (key from the account page)\n  --disconnect   stop sending runs to an account\n  --heat         also heat-soak the computer for 12 minutes and measure the speed it keeps
+  --minutes N    length of the heat soak (with --heat)
+  --json-only    save the results file and exit\n  --port N       port for the local results page (default 4174)", env!("CARGO_PKG_VERSION"));
         return;
     }
     if let Some(key) = val("--connect") {
@@ -218,7 +251,7 @@ fn main() {
         match account_file().map(std::fs::remove_file) { Some(Ok(_)) => println!("Disconnected. Runs stay on this computer from now on."), _ => println!("This computer was not connected to an account.") }
         return;
     }
-    let ms: u64 = 1200;
+    let ms: u64 = 700;        // each test is timed three times for this long and the middle result kept
 
     // ---------- what is this machine ----------
     let mut sys = System::new_all(); sys.refresh_all();
@@ -242,17 +275,17 @@ fn main() {
     let disk_json: Vec<Value> = disks.iter().filter(|d| d.total_space() > 0).map(|d| json!({ "fs": d.file_system().to_string_lossy(), "kind": format!("{:?}", d.kind()), "total": d.total_space(), "free": d.available_space(), "removable": d.is_removable() })).collect();
     let here = disks.iter().filter(|d| dir.starts_with(d.mount_point())).max_by_key(|d| d.mount_point().as_os_str().len());
 
-    println!("\n  1000MARK {} · computer test\n  {cpu_name} · {cores} cores, {threads} threads · {:.0} GB RAM\n  Testing the drive that holds {shown_dir}\n  Leave the computer alone until it finishes (about three minutes).", env!("CARGO_PKG_VERSION"), ram_gb(ram));
+    println!("\n  1000MARK {} · computer test\n  {cpu_name} · {cores} cores, {threads} threads · {:.0} GB RAM\n  Testing the drive that holds {shown_dir}\n  Leave the computer alone until it finishes (about four minutes; with --heat, about sixteen).", env!("CARGO_PKG_VERSION"), ram_gb(ram));
 
     let mut sc = Scorer::new();
     let mut errors = Map::new();
+    let started = std::time::Instant::now();
 
-    // ---------- CPU ----------
-    for t in cpu::TESTS { say(&format!("CPU · {t} · one core")); let v = cpu::single(t, ms); sc.show(&format!("n_cpu_{t}"), v); }
-    // Six threads: about as many as a game or a busy app keeps working (fewer if the computer has fewer).
+    // ---------- CPU: one core, six threads (about what a game or a busy app keeps working), every thread ----------
     let six = threads.min(6);
-    for t in cpu::SIX { say(&format!("CPU · {t} · {six} threads")); let v = cpu::multi(t, ms, six); sc.show(&format!("n_cpu_6t_{t}"), v); }
-    for t in cpu::TESTS { say(&format!("CPU · {t} · all {threads} threads")); let v = cpu::multi(t, ms, threads); sc.show(&format!("n_cpu_mt_{t}"), v); }
+    for t in cpu::TESTS { say(&format!("CPU · {t} · one core")); let v = cpu::single(t, ms); sc.show(&format!("c1_{t}"), v); }
+    for t in cpu::TESTS { say(&format!("CPU · {t} · {six} threads")); let v = cpu::multi(t, ms, six); sc.show(&format!("c6_{t}"), v); }
+    for t in cpu::TESTS { say(&format!("CPU · {t} · all {threads} threads")); let v = cpu::multi(t, ms, threads); sc.show(&format!("ca_{t}"), v); }
 
     // ---------- memory ----------
     say("Memory");
@@ -260,7 +293,7 @@ fn main() {
 
     // ---------- storage ----------
     let mut info = Map::new();
-    match storage::run(&dir, false, |id, v| sc.show(id, v), say) {
+    match storage::run(&dir, here.map(|d| d.available_space()).unwrap_or(u64::MAX), |id, v| sc.show(id, v), say) {
         Ok(o) => { info.insert("fileBytes".into(), json!(o.file_bytes)); info.insert("direct".into(), json!(o.direct)); }
         Err(e) => { errors.insert("storage".into(), json!(format!("{e} (testing in {shown_dir})"))); }
     }
@@ -273,19 +306,42 @@ fn main() {
 
     // ---------- GPU ----------
     say("GPU");
-    let mut gpu_errs: Vec<(String, String)> = Vec::new();
-    let g = gpu::run(ms, |id, v| sc.show(id, v), |id, e| gpu_errs.push((id.into(), e)), say);
-    for (k, v) in gpu_errs { errors.insert(k, json!(v)); }
-    let (gpu_name, gpus) = match &g {
-        Some(i) => { info.insert("gpuApi".into(), json!(format!("{} (native)", i.backend))); info.insert("gpuAdapter".into(), json!(format!("{} · {}", i.name, i.driver))); info.insert("gpuKind".into(), json!(i.kind)); info.insert("rayTracing".into(), json!(i.rt)); (i.name.clone(), i.others.clone()) }
-        None => { errors.insert("gpu".into(), json!("No graphics adapter was found that supports Vulkan, Metal or DirectX 12.")); (String::new(), vec![]) }
+    let g = match gpu::Gpu::open() {
+        Ok(Some(g)) => Some(g),
+        Ok(None) => { errors.insert("gpu".into(), json!("No graphics adapter was found that supports Vulkan, Metal or DirectX 12.")); None }
+        Err(e) => { errors.insert("gpu".into(), json!(e)); None }
     };
+    let (mut gpu_name, mut gpus, mut vram) = (String::new(), vec![], None);
+    if let Some(g) = &g {
+        let mut compute_rays = None;
+        for (id, label) in gpu::TESTS {
+            say(label);
+            match g.test(id, ms) { Ok(v) => { if *id == "gpu_rays" { compute_rays = Some(v); } sc.show(id, v) } Err(e) => { errors.insert((*id).into(), json!(e)); } }
+        }
+        // Without ray-tracing hardware within reach the compute result stands in, so the chip scores what it can do.
+        say("GPU · ray tracing (hardware)");
+        let (hw, how) = g.hardware_rays(ms);
+        if let Some(v) = hw.or(compute_rays) { sc.show("gpu_rt", v); }
+        let i = g.info(ram);
+        info.insert("gpuApi".into(), json!(format!("{} (native)", i.backend))); info.insert("gpuAdapter".into(), json!(format!("{} · {}", i.name, i.driver))); info.insert("gpuKind".into(), json!(i.kind)); info.insert("rayTracing".into(), json!(how));
+        if let Some((_, shared)) = i.vram { info.insert("vramShared".into(), json!(shared)); }
+        gpu_name = i.name; gpus = i.others; vram = i.vram;
+    }
     // ---------- capacity (computer test only: a browser cannot see these) ----------
-    sc.show("n_mem_size", ram_gb(ram));
-    if let Some(d) = here { sc.show("n_sto_total", d.total_space() as f64 / 1e9); }
+    sc.show("sz_ram", ram_gb(ram));
+    if let Some((gb, _)) = vram { sc.show("sz_vram", gb); }
+    if let Some(d) = here { sc.show("sz_drive", d.total_space() as f64 / 1e9); }
+
+    // ---------- heat: how much speed is left once the computer is hot ----------
+    let soak = if has("--heat") { Some(val("--minutes").and_then(|m| m.parse().ok()).unwrap_or(12u64)) } else { None };
+    let heat = heat(&sc, g.as_ref(), threads, soak, started);
     print!("\r\x1b[2K");
     for (k, v) in &errors { println!("    ✗ {k}: {}", v.as_str().unwrap_or("")); }
     sc.summary();
+    if let (Some(c), Some(m)) = (heat["cpu"].as_f64(), heat["minutes"].as_f64()) {
+        let gpu = heat["gpu"].as_f64().map(|g| format!(", the GPU {:.0}%", g * 100.0)).unwrap_or_default();
+        println!("  Heat: after {m:.0} minutes{} the CPU keeps {:.0}% of its speed{gpu}.{}\n", if soak.is_some() { " under full load" } else { " of testing" }, c * 100.0, if soak.is_some() { "" } else { "\n  Run with --heat for the 15-minute heat test." });
+    }
 
     // ---------- results ----------
     let mut tests = Map::new();
@@ -293,12 +349,12 @@ fn main() {
     let (time, secs) = iso_now();
     let form = form_factor();
     let run = json!({
-        "pressmark": 1, "native": true, "id": format!("n{secs:x}"), "time": time, "mode": "full",
+        "pressmark": 1, "suite": 1, "native": true, "id": format!("n{secs:x}"), "time": time, "mode": "full",
         "label": val("--name").unwrap_or_else(|| device_name(&cpu_name, form)),
         "device": { "native": true, "cpu": cpu_name, "physCores": cores, "cores": threads, "memoryBytes": ram, "memory": null,
                     "os": os, "arch": System::cpu_arch(), "browser": format!("1000Mark computer test {}", env!("CARGO_PKG_VERSION")), "model": cpu_name,
                     "gpu": gpu_name, "gpus": gpus, "disks": disk_json, "drives": drives(), "screen": "", "formFactor": form, "secure": true, "webgpu": true, "webcodecs": false },
-        "tests": tests, "errors": errors, "info": info,
+        "tests": tests, "errors": errors, "info": info, "heat": heat,
     });
     let text = serde_json::to_string_pretty(&run).unwrap();
     if has("--show-data") { println!("  This is everything that is sent:\n\n{text}\n"); }
@@ -333,10 +389,10 @@ fn main() {
     if !has("--no-open") { let _ = open::that(&url); }
     for req in server.incoming_requests() {
         let path = req.url().split('?').next().unwrap_or("/").to_string();
-        let (ctype, body) = if path == "/native-run.json" { ("application/json", text.as_str()) }
+        let (ctype, body) = if path == "/native-run.json" { ("application/json", text.as_bytes()) }
             else if let Some((_, c, b)) = SITE.iter().find(|(p, _, _)| *p == path) { (*c, *b) }
             else { let _ = req.respond(tiny_http::Response::from_string("Not found").with_status_code(404)); continue; };
-        let mut resp = tiny_http::Response::from_string(body);
+        let mut resp = tiny_http::Response::from_data(body);
         for (k, v) in [("Content-Type", ctype), ("Cache-Control", "no-store"), ("Cross-Origin-Opener-Policy", "same-origin"), ("Cross-Origin-Embedder-Policy", "credentialless")] {
             resp.add_header(tiny_http::Header::from_bytes(k.as_bytes(), v.as_bytes()).unwrap());
         }

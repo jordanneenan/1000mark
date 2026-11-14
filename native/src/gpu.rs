@@ -66,7 +66,7 @@ struct VO { @builtin(position) pos: vec4<f32>, @location(0) c: vec3<f32> }
 }
 @fragment fn fs(i: VO) -> @location(0) vec4<f32> { return vec4<f32>(i.c, 1.0); }"#;
 
-pub struct Info { pub name: String, pub backend: String, pub kind: String, pub driver: String, pub others: Vec<String>, pub rt: String }
+pub struct Info { pub name: String, pub backend: String, pub kind: String, pub driver: String, pub others: Vec<String>, pub vram: Option<(f64, bool)> }
 
 // The newer shaders are read out of tests/gpu.js, so the browser and the computer test cannot drift apart.
 const GPU_JS: &str = include_str!("../../tests/gpu.js");
@@ -363,50 +363,85 @@ fn readback(d: &wgpu::Device, q: &wgpu::Queue, ms: u64) -> f64 {
     std::hint::black_box(sink); r
 }
 
-pub fn run(ms: u64, mut put: impl FnMut(&str, f64), mut fail: impl FnMut(&str, String), mut say: impl FnMut(&str)) -> Option<Info> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, compatible_surface: None, force_fallback_adapter: false }))?;
-    let ai = adapter.get_info();
-    let others = instance.enumerate_adapters(wgpu::Backends::all()).into_iter().map(|a| a.get_info()).filter(|i| i.name != ai.name).map(|i| format!("{} ({:?})", i.name, i.backend)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
-    let mut info = Info { name: ai.name.clone(), backend: format!("{:?}", ai.backend), kind: format!("{:?}", ai.device_type), driver: format!("{} {}", ai.driver, ai.driver_info).trim().to_string(), others, rt: "compute".into() };
-    let (device, queue) = match pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { label: None, required_features: wgpu::Features::empty(), required_limits: wgpu::Limits::default(), memory_hints: Default::default() }, None)) {
-        Ok(x) => x, Err(e) => { fail("gpu", e.to_string()); return Some(info); } };
-    let scene_rt = rt_scene();
-    let tests: [(&str, &str, &dyn Fn() -> f64); 8] = [
-        ("gpu_matmul", "GPU · matrix compute", &|| matmul(&device, &queue, ms)),
-        ("gpu_particles", "GPU · particle compute", &|| particles(&device, &queue, ms)),
-        ("gpu_fill", "GPU · pixel shading", &|| render(&device, &queue, ms, FILL, 4, true, 4 * W as u64 * H as u64)),
-        ("gpu_geom", "GPU · triangle throughput", &|| render(&device, &queue, ms, GEOM, 400_000, false, 400_000)),
-        ("gpu_scene", "GPU · game-like scene", &|| scene(&device, &queue, ms)),
-        ("gpu_rays", "GPU · ray tracing (compute)", &|| rays(&device, &queue, ms, &scene_rt)),
-        ("gpu_upload", "GPU · upload", &|| upload(&device, &queue, ms)),
-        ("gpu_readback", "GPU · readback", &|| readback(&device, &queue, ms)),
-    ];
-    let crash = |e: Box<dyn std::any::Any + Send>| e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "GPU test crashed".into());
-    let mut compute_rays = None;
-    for (id, label, f) in tests {
-        say(label);
-        match catch_unwind(AssertUnwindSafe(f)) {
-            Ok(v) => { if id == "gpu_rays" { compute_rays = Some(v); } put(id, v) }
-            Err(e) => fail(id, crash(e)),
-        }
+pub const TESTS: &[(&str, &str)] = &[
+    ("gpu_matmul", "GPU · matrix compute"), ("gpu_particles", "GPU · particle compute"), ("gpu_fill", "GPU · pixel shading"), ("gpu_geom", "GPU · triangle throughput"),
+    ("gpu_scene", "GPU · game-like scene"), ("gpu_rays", "GPU · ray tracing (compute)"), ("gpu_upload", "GPU · upload"), ("gpu_readback", "GPU · readback"),
+];
+fn crash(e: Box<dyn std::any::Any + Send>) -> String { e.downcast_ref::<String>().cloned().or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string())).unwrap_or_else(|| "GPU test crashed".into()) }
+
+pub struct Gpu { instance: wgpu::Instance, adapter: wgpu::Adapter, device: wgpu::Device, queue: wgpu::Queue, ai: wgpu::AdapterInfo, scene: RtScene }
+impl Gpu {
+    /// Ok(None): no graphics adapter at all. Err: an adapter that would not give a device.
+    pub fn open() -> Result<Option<Gpu>, String> {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let Some(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, compatible_surface: None, force_fallback_adapter: false })) else { return Ok(None) };
+        let ai = adapter.get_info();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { label: None, required_features: wgpu::Features::empty(), required_limits: wgpu::Limits::default(), memory_hints: Default::default() }, None)).map_err(|e| e.to_string())?;
+        Ok(Some(Gpu { instance, adapter, device, queue, ai, scene: rt_scene() }))
     }
-    // Ray-tracing hardware: on this adapter if its driver offers ray queries, else the same chip
-    // through Vulkan (DirectX 12 and Metal do not offer them in wgpu yet). Without it, the compute
-    // result stands in, so a GPU without the hardware scores what it can actually do.
-    say("GPU · ray tracing (hardware)");
-    let hw = if adapter.features().contains(RT_FEATURES) { Some(adapter) } else {
-        instance.enumerate_adapters(wgpu::Backends::VULKAN).into_iter().find(|a| a.get_info().name == ai.name && a.features().contains(RT_FEATURES)) };
-    let mut hw_result = None;
-    if let Some(a) = hw {
-        match catch_unwind(AssertUnwindSafe(|| rays_hw(&a, ms, &scene_rt))) {
-            Ok(Ok(v)) => { hw_result = Some(v); info.rt = format!("hardware ({:?})", a.get_info().backend); }
-            Ok(Err(e)) => info.rt = format!("compute (ray queries failed: {e})"),
-            Err(e) => info.rt = format!("compute (ray queries crashed: {})", crash(e)),
-        }
+    pub fn info(&self, ram: u64) -> Info {
+        let ai = &self.ai;
+        let others = self.instance.enumerate_adapters(wgpu::Backends::all()).into_iter().map(|a| a.get_info()).filter(|i| i.name != ai.name).map(|i| format!("{} ({:?})", i.name, i.backend)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
+        Info { name: ai.name.clone(), backend: format!("{:?}", ai.backend), kind: format!("{:?}", ai.device_type), driver: format!("{} {}", ai.driver, ai.driver_info).trim().to_string(), others, vram: vram(ai, ram) }
     }
-    if let Some(v) = hw_result.or(compute_rays) { put("n_gpu_rt", v); }
-    Some(info)
+    /// One timing of one test.
+    pub fn once(&self, id: &str, ms: u64) -> Result<f64, String> {
+        let (d, q) = (&self.device, &self.queue);
+        catch_unwind(AssertUnwindSafe(|| match id {
+            "gpu_matmul" => matmul(d, q, ms), "gpu_particles" => particles(d, q, ms),
+            "gpu_fill" => render(d, q, ms, FILL, 4, true, 4 * W as u64 * H as u64), "gpu_geom" => render(d, q, ms, GEOM, 400_000, false, 400_000),
+            "gpu_scene" => scene(d, q, ms), "gpu_rays" => rays(d, q, ms, &self.scene),
+            "gpu_upload" => upload(d, q, ms), "gpu_readback" => readback(d, q, ms), _ => 0.0,
+        })).map_err(crash)
+    }
+    /// The middle of three timings.
+    pub fn test(&self, id: &str, ms: u64) -> Result<f64, String> { Ok(crate::cpu::median(vec![self.once(id, ms)?, self.once(id, ms)?, self.once(id, ms)?])) }
+    /// Ray-tracing hardware: on this adapter if its driver offers ray queries, else the same chip
+    /// through Vulkan (DirectX 12 and Metal do not offer them in wgpu yet). Returns the result and how
+    /// it was reached; None means there is no such hardware within reach and the compute result stands in.
+    pub fn hardware_rays(&self, ms: u64) -> (Option<f64>, String) {
+        let found = if self.adapter.features().contains(RT_FEATURES) { Some(self.adapter.clone()) } else {
+            self.instance.enumerate_adapters(wgpu::Backends::VULKAN).into_iter().find(|a| a.get_info().name == self.ai.name && a.features().contains(RT_FEATURES)) };
+        let Some(a) = found else { return (None, "compute".into()) };
+        let mut v = Vec::new();
+        for _ in 0..3 { match catch_unwind(AssertUnwindSafe(|| rays_hw(&a, ms, &self.scene))) {
+            Ok(Ok(x)) => v.push(x), Ok(Err(e)) => return (None, format!("compute (ray queries failed: {e})")), Err(e) => return (None, format!("compute (ray queries crashed: {})", crash(e))) } }
+        (Some(crate::cpu::median(v)), format!("hardware ({:?})", a.get_info().backend))
+    }
+}
+
+/// Memory the graphics chip can use, in GB, and whether it is shared with the system. A chip with
+/// its own memory reports it through the driver; a chip that shares the system's (integrated
+/// graphics, Apple silicon) is counted as half of RAM.
+fn vram(ai: &wgpu::AdapterInfo, ram: u64) -> Option<(f64, bool)> {
+    let gb = |bytes: f64| (bytes / (1u64 << 30) as f64).round();
+    let shared = Some(((ram as f64 / (1u64 << 30) as f64 / 2.0).round().max(1.0), true));
+    if ai.device_type == wgpu::DeviceType::IntegratedGpu || (cfg!(target_os = "macos") && cfg!(target_arch = "aarch64")) { return shared; }
+    if ai.device_type != wgpu::DeviceType::DiscreteGpu { return None; }
+    let run = |cmd: &str, args: &[&str]| std::process::Command::new(cmd).args(args).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).to_string());
+    #[cfg(target_os = "linux")]
+    {
+        if ai.vendor == 0x10de { if let Some(out) = run("nvidia-smi", &["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]) {
+            let rows: Vec<(String, f64)> = out.lines().filter_map(|l| { let (n, m) = l.rsplit_once(',')?; Some((n.trim().to_string(), m.trim().parse().ok()?)) }).collect();
+            if let Some((_, mib)) = rows.iter().find(|(n, _)| ai.name.contains(n.as_str()) || n.contains(&ai.name)).or(rows.first()) { return Some((gb(mib * 1048576.0), false)); } } }
+        if let Ok(rd) = std::fs::read_dir("/sys/class/drm") { for e in rd.flatten() {
+            let rd = |f: &str| std::fs::read_to_string(e.path().join("device").join(f)).unwrap_or_default();
+            let hex = |s: String| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).unwrap_or(0);
+            if hex(rd("vendor")) == ai.vendor && hex(rd("device")) == ai.device { if let Ok(b) = rd("mem_info_vram_total").trim().parse::<f64>() { if b > 0.0 { return Some((gb(b), false)); } } }
+        } }
+    }
+    #[cfg(target_os = "windows")]
+    if let Some(out) = run("powershell", &["-NoProfile", "-Command", "Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}\\0*' -ErrorAction SilentlyContinue | ForEach-Object { $_.DriverDesc + '|' + $_.'HardwareInformation.qwMemorySize' }"]) {
+        let rows: Vec<(String, f64)> = out.lines().filter_map(|l| { let (n, m) = l.rsplit_once('|')?; Some((n.trim().to_string(), m.trim().parse().ok()?)) }).collect();
+        if let Some((_, b)) = rows.iter().find(|(n, _)| ai.name.contains(n.as_str()) || n.contains(&ai.name)).or(rows.iter().max_by(|a, b| a.1.total_cmp(&b.1))) { if *b > 0.0 { return Some((gb(*b), false)); } }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(out) = run("system_profiler", &["SPDisplaysDataType"]) {
+        for l in out.lines() { if let Some((k, v)) = l.split_once(':') { if k.trim().starts_with("VRAM") { let mut w = v.split_whitespace();
+            if let (Some(n), Some(u)) = (w.next().and_then(|n| n.parse::<f64>().ok()), w.next()) { return Some((if u.starts_with("MB") { (n / 1024.0).round() } else { n }, false)); } } } }
+    }
+    let _ = (run, gb);
+    None
 }
 
 #[cfg(test)]
@@ -425,7 +460,9 @@ mod tests {
     #[test]
     #[ignore]
     fn gpu_only() {
-        let info = super::run(1200, |id, v| println!("{id} {v:.1}"), |id, e| println!("{id} FAILED {e}"), |_| {});
-        if let Some(i) = info { println!("{} · ray tracing: {}", i.name, i.rt); }
+        let g = super::Gpu::open().unwrap().unwrap();
+        for (id, _) in super::TESTS { println!("{id} {:?}", g.test(id, 700)); }
+        println!("gpu_rt {:?}", g.hardware_rays(700));
+        let i = g.info(32 << 30); println!("{} · vram {:?}", i.name, i.vram);
     }
 }
