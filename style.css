@@ -8,6 +8,7 @@
   --hero-bg:#1D2B6B; --hero-fg:#E6E9E4; --hero-shadow:#FFC93C;
   --chip-bg:#1D2B6B; --chip-fg:#E6E9E4;
   --mark:#1D2B6B;          /* data drawn in the key ink: thread squares, hatched bars, fills */
+  --gold:#FFC93C; --silver:#C3CAD6; --bronze:#D98A4E; --medal-edge:#1D2B6B; --medal-shadow:#1D2B6B; --medal-tex:#1D2B6B;   /* badges */
   --on-spot:#1D2B6B;       /* text printed on top of a spot colour */
   --blend:multiply;
   --display:"Anton","Impact","Arial Narrow Bold",sans-serif;
@@ -20,8 +21,8 @@
    dark, and colour goes down as solid floods with the type knocked out to the paper. So here the sheet
    is a warm soft black, panels are tone-on-tone (like a gloss varnish on black), text is a bone ink,
    the part stamps are floods of colour with dark type, and the big score is bare type in yellow. */
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--paper:#17161B;--surface:#211F27;--paper-2:#35323E;--ink:#D2CAB4;--line:#5C5768;--pink:#FF5C8A;--sun:#F3B53A;--mint:#63C7A5;--mark:#7BA5F0;--on-spot:#17161B;--hero-bg:#17161B;--hero-fg:#F3B53A;--hero-shadow:#FF5C8A;--hero-border:#F3B53A;--chip-bg:#D2CAB4;--chip-fg:#17161B;--flood-sun:#F3B53A;--flood-pink:#FF5C8A;--flood-mint:#63C7A5;--flood-ink:#7BA5F0;--flood-fg:#17161B;--stamp-border:transparent;--sh-sun:#FF5C8A;--sh-pink:#F3B53A;--sh-mint:#7BA5F0;--sh-ink:#63C7A5;--blend:normal;color-scheme:dark}}
-:root[data-theme="dark"]{--paper:#17161B;--surface:#211F27;--paper-2:#35323E;--ink:#D2CAB4;--line:#5C5768;--pink:#FF5C8A;--sun:#F3B53A;--mint:#63C7A5;--mark:#7BA5F0;--on-spot:#17161B;--hero-bg:#17161B;--hero-fg:#F3B53A;--hero-shadow:#FF5C8A;--hero-border:#F3B53A;--chip-bg:#D2CAB4;--chip-fg:#17161B;--flood-sun:#F3B53A;--flood-pink:#FF5C8A;--flood-mint:#63C7A5;--flood-ink:#7BA5F0;--flood-fg:#17161B;--stamp-border:transparent;--sh-sun:#FF5C8A;--sh-pink:#F3B53A;--sh-mint:#7BA5F0;--sh-ink:#63C7A5;--blend:normal;color-scheme:dark}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--paper:#17161B;--surface:#211F27;--paper-2:#35323E;--ink:#D2CAB4;--line:#5C5768;--pink:#FF5C8A;--sun:#F3B53A;--mint:#63C7A5;--mark:#7BA5F0;--on-spot:#17161B;--hero-bg:#17161B;--hero-fg:#F3B53A;--hero-shadow:#FF5C8A;--hero-border:#F3B53A;--chip-bg:#D2CAB4;--chip-fg:#17161B;--flood-sun:#F3B53A;--flood-pink:#FF5C8A;--flood-mint:#63C7A5;--flood-ink:#7BA5F0;--flood-fg:#17161B;--gold:#F3B53A;--silver:#B9BDC8;--bronze:#D08C55;--medal-edge:#17161B;--medal-shadow:#08080A;--medal-tex:#17161B;--stamp-border:transparent;--sh-sun:#FF5C8A;--sh-pink:#F3B53A;--sh-mint:#7BA5F0;--sh-ink:#63C7A5;--blend:normal;color-scheme:dark}}
+:root[data-theme="dark"]{--paper:#17161B;--surface:#211F27;--paper-2:#35323E;--ink:#D2CAB4;--line:#5C5768;--pink:#FF5C8A;--sun:#F3B53A;--mint:#63C7A5;--mark:#7BA5F0;--on-spot:#17161B;--hero-bg:#17161B;--hero-fg:#F3B53A;--hero-shadow:#FF5C8A;--hero-border:#F3B53A;--chip-bg:#D2CAB4;--chip-fg:#17161B;--flood-sun:#F3B53A;--flood-pink:#FF5C8A;--flood-mint:#63C7A5;--flood-ink:#7BA5F0;--flood-fg:#17161B;--gold:#F3B53A;--silver:#B9BDC8;--bronze:#D08C55;--medal-edge:#17161B;--medal-shadow:#08080A;--medal-tex:#17161B;--stamp-border:transparent;--sh-sun:#FF5C8A;--sh-pink:#F3B53A;--sh-mint:#7BA5F0;--sh-ink:#63C7A5;--blend:normal;color-scheme:dark}
 /* Anything printed on a spot colour keeps the dark key ink in both themes, so it stays readable. */
 .now,.btn.primary,.crumbs a:first-child,.cols .col.sel,.keybox{--ink:var(--on-spot);--line:var(--on-spot);--mark:var(--on-spot);--paper:#E6E9E4;--surface:#E6E9E4;color:var(--on-spot)}
 *{box-sizing:border-box}
@@ -402,3 +403,54 @@ td .off{opacity:.6;font-weight:400}
   .bars.many .bar-key{column-span:all}
   .lede{font-size:19px}
 }
+
+/* Badges. Champion: a fluorescent starburst with a halftone glow that breathes. Gold, silver and
+   bronze: octagonal medals on a ribbon, told apart by texture as well as colour (solid, hatched, dot
+   screen), with the same hard offset shadow as every other printed thing on the page. */
+.badges{display:inline-flex;align-items:center;gap:3px;margin-left:6px;vertical-align:middle}
+.badge{display:inline-flex;align-items:center;gap:1px;line-height:1;cursor:help;outline-offset:2px}
+.badge:focus-visible{outline:3px solid var(--pink)}
+.badge .bd-svg{width:auto;height:20px;display:block;overflow:visible}
+.badge.t-champion .bd-svg{height:24px}
+.badge b{font:700 10.5px var(--mono);letter-spacing:.02em;color:var(--ink)}
+.badge.big .bd-svg{height:46px}.badge.big.t-champion .bd-svg{height:54px}
+.bd-face{stroke:var(--medal-edge);stroke-width:1.4;stroke-linejoin:miter}
+.t-gold .bd-face{fill:var(--gold)}.t-silver .bd-face{fill:var(--silver)}.t-bronze .bd-face{fill:var(--bronze)}
+.bd-shadow{fill:var(--medal-shadow)}
+.bd-tex{fill:var(--medal-tex);opacity:.42}
+.bd-shine{fill:#fff;opacity:.55}
+.bd-strap{stroke:var(--medal-edge);stroke-width:1.1}
+.bd-strap.a{fill:var(--pink)}.bd-strap.b{fill:var(--mark)}
+.t-champion .bd-face{fill:var(--sun)}
+.t-champion .bd-shadow{fill:var(--pink)}
+.bd-star{fill:var(--on-spot)}
+.bd-halo-dot{fill:var(--pink)}
+.bd-halo{transform-origin:16px 16px;animation:bd-glow 2.6s ease-in-out infinite}
+.bd-spin{transform-origin:16px 16px;animation:bd-spin 18s linear infinite}
+@keyframes bd-glow{0%,100%{opacity:.35;transform:scale(.82)}50%{opacity:1;transform:scale(1.04)}}
+@keyframes bd-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.bd-halo,.bd-spin{animation:none}.bd-halo{opacity:.7}}
+.mast .me{display:inline-flex;align-items:center}
+.mast .me .badges{margin-left:8px}
+.mast .me .badge{cursor:pointer}
+
+/* The card a badge shows on hover or focus: one per tier, listing every badge of that tier. */
+.bd-tip{position:fixed;z-index:60;width:min(340px,calc(100vw - 16px));background:var(--surface);color:var(--ink);border:3px solid var(--line);box-shadow:6px 6px 0 var(--pink);padding:12px 14px;display:grid;gap:10px;pointer-events:none;font-size:13.5px;line-height:1.35}
+.bd-tip[hidden]{display:none}
+.bd-tip-head{display:flex;align-items:center;gap:10px;border-bottom:3px solid var(--line);padding-bottom:8px}
+.bd-tip-head .bd-svg{height:30px}
+.bd-tip-head b{display:block;font:400 22px/1 var(--display);text-transform:uppercase;letter-spacing:.02em}
+.bd-tip-head small,.bd-tip-row small{font:400 11px var(--mono);text-transform:uppercase;letter-spacing:.05em;opacity:.85}
+.bd-tip-row{display:grid;gap:2px}
+.bd-tip-row b{font:700 12px var(--mono);text-transform:uppercase;letter-spacing:.05em}
+
+/* Badge rules (leaderboard) and your own badges (account page). */
+.bd-rules,.bd-mine{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr));gap:14px 22px}
+.bd-rule{display:grid;grid-template-columns:60px minmax(0,1fr);gap:12px;align-items:center}
+.bd-rule .badge{justify-content:center;cursor:default}
+.bd-rule b{display:block;font:400 21px/1.05 var(--display);text-transform:uppercase;letter-spacing:.02em}
+.bd-rule span{font-size:14px}
+.bd-rule small{display:block;margin-top:3px;font:400 11px var(--mono);text-transform:uppercase;letter-spacing:.05em;opacity:.85}
+.bd-how{margin-top:16px}
+.bd-how summary{cursor:pointer;font:700 12px var(--mono);text-transform:uppercase;letter-spacing:.06em}
+.bd-how[open] summary{margin-bottom:14px}

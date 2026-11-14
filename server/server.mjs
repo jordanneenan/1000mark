@@ -59,6 +59,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS guard (email_idx TEXT PRIMARY KEY, fails INTEGER NOT NULL, tier INTEGER NOT NULL, locked_until INTEGER NOT NULL, last_fail INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS support (id INTEGER PRIMARY KEY, created INTEGER NOT NULL, email_enc TEXT NOT NULL, email_idx TEXT NOT NULL, kind TEXT NOT NULL, message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open');
   CREATE TABLE IF NOT EXISTS handoffs (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS badges (key TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, run_id TEXT NOT NULL, since INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS keys (key_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, label TEXT NOT NULL, created INTEGER NOT NULL, last_used INTEGER);
 `);
 const q = sql => db.prepare(sql);
@@ -250,6 +251,81 @@ function outliers(list) {
   return out;
 }
 
+// ---------- the leaderboard and its badges ----------
+// Badges go to whoever holds first place, worked out from the computer-test runs on the leaderboard
+// (browser runs measure the browser as much as the computer, and runs held back for review never win):
+//   champion  the highest system score of all
+//   gold      the highest score in a use case (gaming, AI ...) or a part (CPU speed, GPU speed ...)
+//   silver    the highest score in a group of tests inside a part (CPU · one core, GPU · ray tracing ...)
+//   bronze    a system score in the top 10% of people on the leaderboard
+// The badges table remembers since when each one has been held by the same person, so the page can
+// say how long. A badge moves only when someone beats it outright: a tie stays with the earlier run.
+const TIERS = ['champion', 'gold', 'silver', 'bronze'];
+const ordinal = n => n + (n % 100 >= 11 && n % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
+function computeBadges(list) {
+  const { PROFILES, CATS, TESTS, scoreRun } = scoring;
+  const pool = list.filter(r => !r.review && r.e.kind === 'app' && r.e.suite === scoring.SUITE).map(r => {
+    const run = { ...r.e, tests: rawTests(r.e) };
+    return { r, by: Object.fromEntries(PROFILES.map(p => [p.id, scoreRun(run, p)])) };
+  });
+  const hw = e => [e.device?.cpu, e.device?.gpu].filter(Boolean).join(' + ') || 'their computer';
+  const fmt = v => Math.round(v).toLocaleString('en-AU'), lower = w => w.replace(/\b(?![A-Z]{2,}\b)\w+/g, x => x.toLowerCase());
+  const held = [];
+  const award = (key, tier, title, valueOf, why) => {
+    let top = null;
+    for (const x of pool) { const v = valueOf(x); if (!(v > 0)) continue; if (!top || v > top.v || (v === top.v && x.r.e.submitted < top.x.r.e.submitted)) top = { x, v }; }
+    if (top) held.push({ key, tier, uid: top.x.r.uid, run: top.x.r.e.id, title, why: `${why(top.v)}, with ${hw(top.x.r.e)}.` });
+  };
+  award('champion', 'champion', 'Champion', x => x.by.general.system, v => `The highest system score on the leaderboard: ${fmt(v)} points`);
+  for (const p of PROFILES.slice(1)) award('use:' + p.id, 'gold', `Gold · ${p.name}`, x => x.by[p.id].system, v => `The highest ${p.score.toLowerCase()} on the leaderboard: ${fmt(v)} points`);
+  for (const c of CATS) award('part:' + c.id, 'gold', `Gold · ${c.name}`, x => x.by.general.cats[c.id], v => `The highest ${lower(c.name)} score on the leaderboard: ${fmt(v)} points`);
+  const groups = new Map();
+  for (const [id, t] of Object.entries(TESTS)) if (t.ref && !t.unscored && t.general !== 0) { const k = `${t.cat}|${t.group}`; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(id); }
+  for (const [k, ids] of groups) {
+    const [cat, group] = k.split('|'), c = CATS.find(x => x.id === cat);
+    if ([...groups.keys()].filter(g => g.startsWith(cat + '|')).length < 2) continue;   // the part's only group: its gold already covers it
+    const value = x => { const v = ids.map(id => x.by.general.tests[id]).filter(v => v > 0); return v.length ? Math.exp(v.reduce((a, b) => a + Math.log(b), 0) / v.length) : 0; };
+    award(`group:${k}`, 'silver', `Silver · ${c.name} · ${group}`, value, v => `The highest ${lower(c.short)} score for ${group.toLowerCase()} on the leaderboard: ${fmt(v)} points`);
+  }
+  // Bronze: each person counts once, with their best system score.
+  const people = new Map();
+  for (const x of pool) { const v = x.by.general.system, b = people.get(x.r.uid); if (v > 0 && (!b || v > b.v)) people.set(x.r.uid, { v, x }); }
+  const ranked = [...people.entries()].sort((a, b) => b[1].v - a[1].v), cut = Math.max(1, Math.ceil(ranked.length * 0.1));
+  ranked.slice(0, cut).forEach(([uid, { v, x }], i) => held.push({ key: 'top10:' + uid, tier: 'bronze', uid, run: x.r.e.id, title: 'Bronze · Top 10%',
+    why: `A system score in the top 10% of everyone on the leaderboard: ${fmt(v)} points, ${ordinal(i + 1)} of ${ranked.length}, with ${hw(x.r.e)}.` }));
+  return held;
+}
+// Keep the badges table in step: a badge that stays with the same person keeps its date.
+function settleBadges(held) {
+  const now = Date.now(), old = new Map(q('SELECT key, user_id, run_id, since FROM badges').all().map(b => [b.key, b]));
+  const put = q('INSERT INTO badges (key, user_id, run_id, since) VALUES (?, ?, ?, ?) ON CONFLICT (key) DO UPDATE SET user_id = excluded.user_id, run_id = excluded.run_id, since = excluded.since');
+  db.exec('BEGIN');
+  try {
+    for (const h of held) {
+      const o = old.get(h.key); old.delete(h.key);
+      h.since = o && o.user_id === h.uid ? o.since : now;
+      if (!o || o.user_id !== h.uid || o.run_id !== h.run) put.run(h.key, h.uid, h.run, h.since);
+    }
+    for (const key of old.keys()) q('DELETE FROM badges WHERE key = ?').run(key);
+    db.exec('COMMIT');
+  } catch (e) { db.exec('ROLLBACK'); throw e; }
+}
+function boardRows() {
+  if (boardCache && boardCache.until > Date.now()) return boardCache;
+  const rows = q('SELECT b.user_id, b.data, b.submitted, u.username FROM board b JOIN users u ON u.id = b.user_id WHERE u.username IS NOT NULL ORDER BY b.submitted DESC LIMIT ?').all(BOARD_MAX)
+    .map(r => ({ uid: r.user_id, e: { ...JSON.parse(r.data), user: r.username, submitted: r.submitted } }));
+  const odd = outliers(rows.map(({ e }) => ({ kind: e.kind, device: e.device, info: e.info, cats: scoring.scoreRun({ ...e, tests: rawTests(e) }).cats })));
+  const list = rows.map((r, i) => ({ ...r, review: odd.has(i) }));
+  const held = computeBadges(list); settleBadges(held);
+  const names = new Map(list.map(r => [r.uid, r.e.user])), badges = {};
+  for (const h of held.sort((a, b) => TIERS.indexOf(a.tier) - TIERS.indexOf(b.tier) || a.title.localeCompare(b.title)))
+    (badges[names.get(h.uid)] ||= []).push({ tier: h.tier, key: h.key, title: h.title, why: h.why, since: h.since, run: h.run });
+  boardCache = { until: Date.now() + 30e3, rows: list, badges };
+  return boardCache;
+}
+// After anything that changes the leaderboard, work the badges out straight away so their dates are right.
+function boardChanged() { boardCache = null; try { boardRows(); } catch (e) { console.error('badges:', e.message); } }
+
 let popCache = null;
 async function population() {
   if (popCache && popCache.until > Date.now()) return popCache.body;
@@ -371,18 +447,12 @@ async function api(req, res, route) {
     return send(res, 200, { run: JSON.parse(h.data) });
   }
 
-  // The public leaderboard: every submitted run with its owner's username.
+  // The public leaderboard: every submitted run with its owner's username, and who holds which badge.
   if (route === 'leaderboard' && method === 'GET') {
     if (!allow('board:' + ip, 120, 60e3)) throw new Fail(429, 'Too many requests. Wait a minute.');
-    const me = sessionUser(req);
-    if (!boardCache || boardCache.until < Date.now()) {
-      const rows = q('SELECT b.user_id, b.data, b.submitted, u.username FROM board b JOIN users u ON u.id = b.user_id WHERE u.username IS NOT NULL ORDER BY b.submitted DESC LIMIT ?').all(BOARD_MAX)
-        .map(r => ({ uid: r.user_id, e: { ...JSON.parse(r.data), user: r.username, submitted: r.submitted } }));
-      const odd = outliers(rows.map(({ e }) => ({ kind: e.kind, device: e.device, info: e.info, cats: scoring.scoreRun({ ...e, tests: rawTests(e) }).cats })));
-      boardCache = { until: Date.now() + 30e3, rows: rows.map((r, i) => ({ ...r, review: odd.has(i) })) };
-    }
+    const me = sessionUser(req), board = boardRows();
     // Entries held back as outliers are shown only to their owner, marked as under review.
-    return send(res, 200, { entries: boardCache.rows.filter(r => r.e.suite === scoring.SUITE).filter(r => !r.review || (me && me.id === r.uid)).map(r => ({ ...r.e, mine: !!me && me.id === r.uid, review: r.review })) });
+    return send(res, 200, { entries: board.rows.filter(r => r.e.suite === scoring.SUITE).filter(r => !r.review || (me && me.id === r.uid)).map(r => ({ ...r.e, mine: !!me && me.id === r.uid, review: r.review })), badges: board.badges });
   }
 
   // Support requests (for example, to unlock an account). Stored with the email encrypted; read with
@@ -428,6 +498,7 @@ async function api(req, res, route) {
     if (!allow('uname:' + user.id, 10, 3600e3)) throw new Fail(429, 'Too many changes. Try again in an hour.');
     if (!usernameFree(username, user.id)) throw new Fail(409, 'That username is taken. Try another.');
     q('UPDATE users SET username = ?, name = ? WHERE id = ?').run(username, username, user.id);
+    boardChanged();
     return send(res, 200, { user: publicUser({ ...user, username, name: username }) });
   }
   if (route === 'leaderboard' && method === 'POST') {
@@ -436,10 +507,10 @@ async function api(req, res, route) {
     if (why) throw new Fail(422, `These results cannot go on the leaderboard: ${why}.`);
     if (q('SELECT COUNT(*) AS n FROM board WHERE user_id = ?').get(user.id).n >= BOARD_PER_USER && !q('SELECT 1 FROM board WHERE user_id = ? AND run_id = ?').get(user.id, e.id)) throw new Fail(409, `You have ${BOARD_PER_USER} runs on the leaderboard. Remove one first.`);
     q('INSERT INTO board (user_id, run_id, kind, submitted, data) VALUES (?, ?, ?, ?, ?) ON CONFLICT (user_id, run_id) DO UPDATE SET data = excluded.data').run(user.id, e.id, e.kind, Date.now(), JSON.stringify(e));
-    boardCache = null;
+    boardChanged();
     return send(res, 200, { ok: true });
   }
-  if (route === 'leaderboard/delete' && method === 'POST') { const b = await readJson(req, 5e3); boardCache = null; return send(res, 200, { deleted: q('DELETE FROM board WHERE user_id = ? AND run_id = ?').run(user.id, String(b.id || '')).changes }); }
+  if (route === 'leaderboard/delete' && method === 'POST') { const b = await readJson(req, 5e3); const deleted = q('DELETE FROM board WHERE user_id = ? AND run_id = ?').run(user.id, String(b.id || '')).changes; boardChanged(); return send(res, 200, { deleted }); }
   if (route === 'keys' && method === 'GET') return send(res, 200, { keys: q('SELECT substr(key_hash, 1, 12) AS id, label, created, last_used FROM keys WHERE user_id = ? ORDER BY created DESC').all(user.id) });
   if (route === 'keys' && method === 'POST') {
     const b = await readJson(req, 5e3);
@@ -462,6 +533,7 @@ async function api(req, res, route) {
     const b = await readJson(req, 20e3), u = q('SELECT pass FROM users WHERE id = ?').get(user.id);
     if (!await checkPassword(String(b.password || ''), u.pass)) throw new Fail(401, 'That password is not right.');
     q('DELETE FROM users WHERE id = ?').run(user.id);                       // runs, keys and sessions go with it
+    boardChanged();
     return send(res, 200, { ok: true }, { 'Set-Cookie': cookie('', 0) });
   }
   throw new Fail(404, 'No such address.');
@@ -503,4 +575,5 @@ const server = http.createServer(async (req, res) => {
   serveFile(req, res, urlPath);
 });
 server.requestTimeout = 20e3; server.headersTimeout = 10e3;            // slow clients cannot hold connections open
+boardChanged();                                                              // badges and their dates, as of now
 server.listen(PORT, HOST, () => console.log(`1000Mark server on http://${HOST}:${PORT}  site=${SITE}  data=${DATA}`));

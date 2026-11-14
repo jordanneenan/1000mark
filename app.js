@@ -54,7 +54,7 @@ async function pullAccount() {
 // The public leaderboard. Also tells the results page which of your runs are on it.
 async function loadBoard() {
   lb.loading = true;
-  try { const { entries } = await api('leaderboard'); lb.entries = entries.filter(isCurrent).map(normalise); lb.error = ''; acct.board = new Set(entries.filter(e => e.mine).map(e => e.id)); }
+  try { const { entries, badges } = await api('leaderboard'); lb.entries = entries.filter(isCurrent).map(normalise); lb.badges = badges || {}; lb.error = ''; acct.board = new Set(entries.filter(e => e.mine).map(e => e.id)); }
   catch (e) { lb.error = msg(e); }
   lb.loading = false;
 }
@@ -106,6 +106,76 @@ const selRun = () => { const g = curGroup(); if (!g) return null; return (state.
 const cmpRun = () => { const g = groups().find(x => x.key === state.cmp), cur = curGroup(); return g && cur && g.key !== cur.key ? aggregate(g, state.stat) : null; };
 const describe = r => r.agg ? `${STATS.find(x => x.id === r.agg.stat).name.toLowerCase()} of ${r.agg.n} runs` : when(r.time);
 const cmpText = c => c ? `${c.label} (${c.native ? 'computer' : 'browser'} test), ${describe(c)}` : '';
+
+// ---------- badges: who holds first place, worked out by the server (see computeBadges in server.mjs) ----------
+// Champion: the highest system score. Gold: the highest score in a use case or a part. Silver: the
+// highest in a group of tests inside a part. Bronze: a system score in the top 10%. Computer tests only.
+// Each tier has its own shape or texture as well as its colour, so they read in print and for colour blindness.
+const TIER = {
+  champion: { name: 'Champion', rule: 'The highest system score on the leaderboard. Only one person holds it.' },
+  gold: { name: 'Gold', rule: 'The highest score in a use case (gaming, AI, video …) or a part (CPU speed, GPU speed …).' },
+  silver: { name: 'Silver', rule: 'The highest score in a group of tests inside a part, such as CPU one core or GPU ray tracing.' },
+  bronze: { name: 'Bronze', rule: 'A system score in the top 10% of everyone on the leaderboard.' },
+};
+const TIER_ORDER = Object.keys(TIER);
+// One set of patterns for every badge on the page: hatching for silver, a dot screen for bronze and the halo.
+const BADGE_DEFS = `<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+  <pattern id="bd-hatch" width="3.2" height="3.2" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="1.1" height="3.2" class="bd-tex"/></pattern>
+  <pattern id="bd-dots" width="3" height="3" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r=".75" class="bd-tex"/></pattern>
+  <pattern id="bd-halo" width="2.6" height="2.6" patternUnits="userSpaceOnUse"><circle cx="1.3" cy="1.3" r=".8" class="bd-halo-dot"/></pattern></defs></svg>`;
+const BURST = (() => { const p = []; for (let i = 0; i < 24; i++) { const r = i % 2 ? 9.2 : 12.6, a = -Math.PI / 2 + i * Math.PI / 12; p.push(`${(16 + Math.cos(a) * r).toFixed(2)},${(16 + Math.sin(a) * r).toFixed(2)}`); } return p.join(' '); })();
+const STAR = (() => { const p = []; for (let i = 0; i < 10; i++) { const r = i % 2 ? 2.2 : 5, a = -Math.PI / 2 + i * Math.PI / 5; p.push(`${(16 + Math.cos(a) * r).toFixed(2)},${(16 + Math.sin(a) * r).toFixed(2)}`); } return p.join(' '); })();
+const OCT = '9,11 17,11 22,16 22,24 17,29 9,29 4,24 4,16';
+function medal(tier) {
+  if (tier === 'champion') return `<svg class="bd-svg" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+    <circle cx="16" cy="16" r="15.5" fill="url(#bd-halo)" class="bd-halo"/>
+    <g class="bd-spin"><polygon points="${BURST}" class="bd-shadow" transform="translate(1.6 1.6)"/><polygon points="${BURST}" class="bd-face"/></g>
+    <polygon points="${STAR}" class="bd-star"/></svg>`;
+  const tex = tier === 'silver' ? 'url(#bd-hatch)' : tier === 'bronze' ? 'url(#bd-dots)' : '';
+  return `<svg class="bd-svg" viewBox="0 0 26 32" aria-hidden="true" focusable="false">
+    <polygon points="5,0 10.5,0 13.5,11 8,11" class="bd-strap a"/><polygon points="15.5,0 21,0 18,11 12.5,11" class="bd-strap b"/>
+    <polygon points="${OCT}" class="bd-shadow" transform="translate(1.6 1.6)"/><polygon points="${OCT}" class="bd-face"/>
+    ${tex ? `<polygon points="${OCT}" fill="${tex}"/>` : '<polygon points="10,14 16,14 19,17" class="bd-shine"/>'}</svg>`;
+}
+const heldFor = since => {
+  const h = (Date.now() - since) / 36e5, n = (v, u) => `${v} ${u}${v === 1 ? '' : 's'}`;
+  return h < 1 ? 'less than an hour' : h < 48 ? n(Math.floor(h), 'hour') : h < 24 * 14 ? n(Math.floor(h / 24), 'day') : h < 24 * 60 ? n(Math.floor(h / 168), 'week') : n(Math.floor(h / 730), 'month');
+};
+let tips = [];
+// The badges a username holds, one mark per tier with a count. Hovering or focusing one shows the card.
+function badgesFor(user, { focus = true } = {}) {
+  const list = (lb.badges || {})[user]; if (!list || !list.length) return '';
+  return `<span class="badges">${TIER_ORDER.map(t => {
+    const items = list.filter(b => b.tier === t); if (!items.length) return '';
+    tips.push({ user, tier: t, items });
+    const label = `${items.length > 1 ? items.length + ' ' : ''}${TIER[t].name} badge${items.length > 1 ? 's' : ''}: ${items.map(b => b.title.replace(/^[^·]*· /, '')).join(', ')}`;
+    return `<span class="badge t-${t}" data-tip="${tips.length - 1}" role="img" aria-label="${esc(label)}" ${focus ? 'tabindex="0"' : ''}>${medal(t)}${items.length > 1 ? `<b>×${items.length}</b>` : ''}</span>`;
+  }).join('')}</span>`;
+}
+function tipCard(tip) {
+  return `<div class="bd-tip-head"><span class="badge t-${tip.tier}">${medal(tip.tier)}</span><div><b>${esc(TIER[tip.tier].name)}${tip.items.length > 1 ? ` × ${tip.items.length}` : ''}</b><small>${esc(tip.user)}</small></div></div>
+    ${tip.items.map(b => `<div class="bd-tip-row"><b>${esc(b.title)}</b><span>${esc(b.why)}</span><small>Held for ${heldFor(b.since)} · since ${new Date(b.since).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</small></div>`).join('')}`;
+}
+const tipBox = document.createElement('div'); tipBox.className = 'bd-tip'; tipBox.id = 'bd-tip'; tipBox.setAttribute('role', 'tooltip'); tipBox.hidden = true;
+document.body.append(tipBox); document.body.insertAdjacentHTML('beforeend', BADGE_DEFS);
+let tipAnchor = null;
+function showTip(el) {
+  const t = tips[+el.dataset.tip]; if (!t) return;
+  tipAnchor = el;
+  tipBox.innerHTML = tipCard(t); tipBox.hidden = false; el.setAttribute('aria-describedby', 'bd-tip');
+  const r = el.getBoundingClientRect(), w = tipBox.offsetWidth, h = tipBox.offsetHeight, gap = 10;
+  const left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2));
+  const top = r.top - h - gap > 8 ? r.top - h - gap : Math.min(innerHeight - h - 8, r.bottom + gap);
+  tipBox.style.left = `${left}px`; tipBox.style.top = `${top}px`;
+}
+const hideTip = () => { tipBox.hidden = true; tipAnchor = null; };
+document.addEventListener('mouseover', e => { const b = e.target.closest('.badge[data-tip]'); if (b) showTip(b); else if (!e.target.closest('.bd-tip')) hideTip(); });
+document.addEventListener('focusin', e => { const b = e.target.closest('.badge[data-tip]'); if (b) showTip(b); else hideTip(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideTip(); });
+// Scrolling (including the scroll that focusing a badge causes) moves the card with its badge.
+addEventListener('scroll', () => { if (!tipAnchor) return; const r = tipAnchor.getBoundingClientRect(); if (!tipAnchor.isConnected || r.bottom < 0 || r.top > innerHeight) hideTip(); else showTip(tipAnchor); }, { passive: true });
+// The rules, with a mark for each tier: on the leaderboard and the account page.
+const badgeRules = () => `<div class="bd-rules">${TIER_ORDER.map(t => `<div class="bd-rule"><span class="badge t-${t} big">${medal(t)}</span><div><b>${TIER[t].name}</b><span>${esc(TIER[t].rule)}</span></div></div>`).join('')}</div>`;
 
 // ---------- percentile: how a score sits among everyone's machines ----------
 // The server sends one anonymous row of scores per machine (/api/population). A percentile compares
@@ -297,7 +367,7 @@ function mast() {
   const v = location.hash.replace('#', '');
   const on = (...ids) => ids.includes(v) ? 'class="on" aria-current="page"' : '';
   const account = !acct.on ? '' : acct.user
-    ? `<a href="#account" ${on('account')}>${esc(acct.user.name)}</a>`
+    ? `<a href="#account" ${on('account')} class="me">${esc(acct.user.name)}${badgesFor(acct.user.username, { focus: false })}</a>`
     : `<a href="#signin" ${on('signin')}>Sign in</a><a href="#register" ${on('register')}>Create account</a>`;
   return `<header class="mast">
     <nav class="acct-nav" aria-label="Account">${account}</nav>
@@ -519,8 +589,8 @@ function submitBar() {
   let body;
   if (!acct.user) body = `<span>Sign in to put ${what} on the public leaderboard.</span><a class="btn" href="#signin">Sign in</a>`;
   else if (!acct.user.username) body = `<span>Choose a username to put ${what} on the leaderboard.</span><a class="btn" href="#account">Choose a username</a>`;
-  else if (on) body = `<span><b>On the leaderboard</b> as ${esc(acct.user.username)}.</span><a class="btn" href="#leaderboard">See the leaderboard</a><button class="btn" data-act="lb-del" data-id="${esc(r.id)}">Remove</button>`;
-  else body = `<span>Put ${what} on the public leaderboard as <b>${esc(acct.user.username)}</b>. It shows the hardware and scores, not the device name.</span><button class="btn primary" data-act="lb-submit" data-id="${esc(r.id)}">Submit to leaderboard</button>`;
+  else if (on) body = `<span><b>On the leaderboard</b> as ${esc(acct.user.username)}${badgesFor(acct.user.username)}.</span><a class="btn" href="#leaderboard">See the leaderboard</a><button class="btn" data-act="lb-del" data-id="${esc(r.id)}">Remove</button>`;
+  else body = `<span>Put ${what} on the public leaderboard as <b>${esc(acct.user.username)}</b>${badgesFor(acct.user.username)}. It shows the hardware and scores, not the device name.</span><button class="btn primary" data-act="lb-submit" data-id="${esc(r.id)}">Submit to leaderboard</button>`;
   return `<section class="submit-bar ${on ? 'on' : ''}">${body}</section>`;
 }
 
@@ -530,7 +600,7 @@ function leaderboardPage() {
   const opt = (v, t, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(t)}</option>`;
   const prof = PROFILES.find(p => p.id === lb.rank), cat = CATS.find(c => 'cat:' + c.id === lb.rank);
   const head = `<nav class="crumbs"><a href="#home">← Results</a></nav>
-    <section class="cat-head"><div><h2 class="cat-title">Leaderboard</h2><p class="lede">Runs people have chosen to share. Every score is on the same fixed scale, where 1000 is ${esc(REF_DEVICE)}.</p></div></section>`;
+    <section class="cat-head"><div><h2 class="cat-title">Leaderboard</h2><p class="lede">Runs people have chosen to share. Every score is on the same fixed scale, where 1000 is ${esc(REF_DEVICE)}. First places earn badges, shown beside the username; hover one to see why and for how long.</p></div></section>`;
   if (!lb.entries) return head + `<p class="note y">${lb.error ? esc(lb.error) : 'Loading the leaderboard…'}</p>`;
   const scoreOf = e => { const s = scoreRun(e, prof || PROFILES[0]); return prof ? s.system : s.cats[cat.id]; };
   let rows = lb.entries.filter(e => e.kind === lb.kind).map(e => ({ e, v: scoreOf(e), parts: scoreRun(e).cats })).filter(x => x.v > 0).sort((a, b) => b.v - a.v);
@@ -544,11 +614,13 @@ function leaderboardPage() {
     </section>
     ${rows.length ? `<section class="block table-wrap"><table class="lb"><thead><tr><th class="r">#</th><th>Who</th><th>Hardware</th><th class="r">${esc(prof ? prof.score : cat.name)}</th>${CATS.map(c => `<th class="r part">${esc(c.short)}</th>`).join('')}<th></th></tr></thead><tbody>
       ${rows.map((x, i) => `<tr class="${x.e.mine ? 'mine' : ''}"><td class="r"><span class="rank r${i + 1}">${i + 1}</span></td>
-        <td><b>${esc(x.e.user)}</b>${x.e.mine ? ' <span class="tag used">You</span>' : ''}${x.e.review ? ' <span class="tag off" title="Much faster than other runs on the same chip. Only you can see it until it is checked.">Under review</span>' : ''}<small>${new Date(x.e.time).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</small></td>
+        <td><b>${esc(x.e.user)}</b>${badgesFor(x.e.user)}${x.e.mine ? ' <span class="tag used">You</span>' : ''}${x.e.review ? ' <span class="tag off" title="Much faster than other runs on the same chip. Only you can see it until it is checked.">Under review</span>' : ''}<small>${new Date(x.e.time).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</small></td>
         <td>${esc(lbName(x.e))}<small>${esc([x.e.device.gpu, x.e.kind === 'app' ? x.e.device.os : x.e.device.browser].filter(Boolean).join(' · '))}</small></td>
         <td class="r score">${pts(x.v)}</td>${CATS.map(c => `<td class="r part">${pts(x.parts[c.id])}</td>`).join('')}
         <td>${x.e.mine ? `<button class="mini" data-act="lb-del" data-id="${esc(x.e.id)}">Remove</button>` : ''}</td></tr>`).join('')}
     </tbody></table></section>` : `<p class="note y">No ${kindName(lb.kind).toLowerCase()} runs on the leaderboard yet. Run a test, then press Submit to leaderboard on your results.</p>`}
+    <div class="label">Badges</div>
+    <section class="block">${badgeRules()}<p class="hint">Badges come from the computer-test leaderboard, using each person's best run, and move as soon as someone beats them; a tie stays with the earlier run. Runs held for review cannot win one.</p></section>
     <p class="foot-note">Computer tests and browser tests are ranked separately, because the browser cannot reach everything the computer test does. Only the username, the hardware and the results are shown.</p>`;
 }
 
@@ -830,6 +902,10 @@ function accountPage() {
     <section class="cat-head"><div><h2 class="cat-title">Account</h2><p class="lede">${esc(u.email)}</p><p class="sub">Account since ${new Date(u.created).toLocaleDateString('en-AU', { day: 'numeric', month: 'long', year: 'numeric' })} · ${state.runs.length} run${state.runs.length === 1 ? '' : 's'} on ${devs.length} device${devs.length === 1 ? '' : 's'} · <a href="#devices">rename or compare devices</a></p></div>
       <div><button class="btn" data-act="signout">Sign out</button></div></section>
     ${notes()}
+    ${(() => { const mine = (lb.badges || {})[u.username] || [];
+      return `<div class="label">Your badges</div><section class="block">${mine.length ? `<div class="bd-mine">${mine.map(b => `<div class="bd-rule"><span class="badge t-${b.tier} big">${medal(b.tier)}</span><div><b>${esc(b.title)}</b><span>${esc(b.why)}</span><small>Held for ${heldFor(b.since)} · since ${new Date(b.since).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</small></div></div>`).join('')}</div>`
+        : `<p class="hint">${u.username ? 'None yet. Submit a computer-test run to the <a href="#leaderboard">leaderboard</a> and take first place somewhere to earn one.' : 'Choose a username below and submit a computer-test run to the leaderboard to start earning badges.'}</p>`}
+        <details class="bd-how"><summary>How badges are earned</summary>${badgeRules()}</details></section>`; })()}
     <div class="label">Username</div>
     <section class="block">
       <form class="form inline" data-form="username"><label for="un-name">${u.username ? 'Shown on the leaderboard' : 'Choose a username to appear on the leaderboard'}</label><input id="un-name" name="username" value="${esc(u.username || '')}" autocomplete="nickname" autocapitalize="off" spellcheck="false" minlength="3" maxlength="24" pattern="[A-Za-z0-9][A-Za-z0-9_.\\-]{2,23}" title="3 to 24 letters, numbers, dots, dashes or underscores. No spaces." required><button class="btn">${u.username ? 'Change' : 'Save'}</button></form>
@@ -893,6 +969,7 @@ async function submitForm(kind, f) {
 
 // ---------- render + events ----------
 function render() {
+  tips = []; hideTip();
   const view = location.hash.replace('#', ''), cat = catOf(view), run = selRun();
   const acctView = ['account', 'signin', 'register'].includes(view) && acct.on;
   let body;
