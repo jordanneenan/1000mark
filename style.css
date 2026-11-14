@@ -280,6 +280,8 @@ table.compare th small{display:block;font:400 11px var(--mono);text-transform:no
 /* Each device's system score sits in its column head, which stays in view while the long table scrolls
    (when the table fits the page; a wider one scrolls sideways instead, and a sticky head cannot work there). */
 table.compare thead th{vertical-align:bottom}
+table.compare th .hparts{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:2px 10px;margin-top:6px;font:700 11px var(--mono);letter-spacing:.02em;text-transform:none}
+table.compare th .hparts i{font-style:normal;font-weight:400;opacity:.8;margin-right:4px;text-transform:uppercase}
 table.compare th .hs{display:block;margin-top:6px;font:400 30px/1 var(--display);letter-spacing:.01em;text-transform:none}
 @media (min-width:900px){
   .table-wrap.pin{overflow:visible}
