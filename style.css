@@ -484,4 +484,5 @@ table.compare .col-move .mini{padding:1px 8px;font-size:13px;line-height:1.3}
 
 /* Select boxes: a heavier arrow of our own, set in from the edge, in place of the browser's small one. */
 .controls select,.cmp-opts select,.lb-controls select,.unit-bar select,.form select,select.mini{appearance:none;-webkit-appearance:none;background-image:var(--chev);background-repeat:no-repeat;background-size:16px 10px;background-position:right 16px center;padding-right:46px}
-select.mini{background-size:12px 8px;background-position:right 8px center;padding-right:28px}
+/* Small ones fit the chosen option (where the browser can), not the longest one, so the arrow sits close. */
+select.mini{background-size:12px 8px;background-position:right 8px center;padding-right:26px;field-sizing:content}
