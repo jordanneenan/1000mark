@@ -465,7 +465,7 @@ function appPage() {
     <div class="label">What it sends</div>
     <section class="block"><dl class="kv">
       <dt>Hardware</dt><dd>Processor model and core count, graphics chip and driver, memory size, drive models and sizes, operating system, and whether it is a laptop or a desktop.</dd>
-      <dt>Results</dt><dd>The speed measured in each test, and any tests that failed.</dd>
+      <dt>Results</dt><dd>The speed measured in each test, any tests that failed, and the power the processor and graphics chip drew where the system reports it.</dd>
       <dt>Device name</dt><dd>Named after its processor (for example "Ryzen 9 5950X desktop"), not your computer's name. You can rename it.</dd>
       <dt>Never</dt><dd>Your name, user name, files, folder names, network details or anything else on the computer.</dd>
     </dl><p class="hint">Add <code>--show-data</code> when you run it to see exactly what it sends, or <code>--local</code> to send nothing and see the results on your computer only. Results are linked to your account only when you sign in; percentiles and the leaderboard never show who you are beyond the username you choose.</p></section>
@@ -565,8 +565,32 @@ function dashboard(run) {
     <div class="label">Every test, strongest first</div>
     <section class="block">${bars(all, barOpts(cmpLabel, run))}</section>
     ${heatBlock(run)}
+    ${powerBlock(run)}
     ${runsBlock()}
     ${problems(run)}`;
+}
+
+// Power drawn by the processor and the graphics chip, where the computer test could read it, and
+// the points each got per watt. The chips' own estimates; never part of a score.
+function efficiency(run) {
+  const p = run.power || {}, t = scoreRun(run).tests;
+  const geo = ids => { const v = ids.map(id => t[id]).filter(x => x > 0); return v.length ? Math.exp(v.reduce((a, x) => a + Math.log(x), 0) / v.length) : null; };
+  const all = geo(Object.keys(t).filter(id => id.startsWith('ca_'))), gpu = geo(Object.keys(t).filter(id => id.startsWith('gpu_')));
+  return { cpu: p.cpuAll > 0 && all ? all / p.cpuAll : null, gpu: p.gpu > 0 && gpu ? gpu / p.gpu : null };
+}
+function powerBlock(run) {
+  const p = run.power || {}; if (!(p.cpuAll > 0) && !(p.gpu > 0)) return '';
+  const e = efficiency(run), rows = [], w = v => `${fmt(v)} W`;
+  if (p.cpuAll > 0) rows.push({ label: 'Processor, all cores', value: p.cpuAll, text: w(p.cpuAll), note: e.cpu ? `${fmt(e.cpu)} points per watt` : '', ink: 'sun' });
+  if (p.cpuOne > 0) rows.push({ label: 'Processor, one core', value: p.cpuOne, text: w(p.cpuOne), ink: 'sun' });
+  if (p.cpuIdle > 0) rows.push({ label: 'Processor, idle', value: p.cpuIdle, text: w(p.cpuIdle), ink: 'sun' });
+  if (p.gpu > 0) rows.push({ label: 'Graphics chip, in its tests', value: p.gpu, text: w(p.gpu), note: e.gpu ? `${fmt(e.gpu)} points per watt` : '', ink: 'pink' });
+  if (p.gpuIdle > 0) rows.push({ label: 'Graphics chip, idle', value: p.gpuIdle, text: w(p.gpuIdle), ink: 'pink' });
+  const src = [p.cpuSource && `the processor's from ${p.cpuSource}`, p.gpuSource && `the graphics chip's from ${p.gpuSource}`].filter(Boolean).join(', ');
+  return `<div class="label">Power</div><section class="block">
+    <div class="lanes-head"><b>Power while testing</b><small>chip estimates · not scored</small></div>
+    ${bars(rows)}
+    <p class="hint">${src ? `Read ${esc(src)}. ` : ''}These are estimates the chips make themselves, not measurements at the wall, and they leave out memory, drives and the power supply. Chip makers estimate differently, so use points per watt for rough comparisons ("about twice as efficient"), not small differences.${!(p.cpuAll > 0) ? ' This system does not report the processor\'s power without admin rights.' : ''}${!(p.gpu > 0) ? ' This graphics chip does not report its power.' : ''}</p></section>`;
 }
 
 // How much speed is left once the device is hot. Not part of any score.
@@ -575,10 +599,13 @@ function heatBlock(run) {
   const pct = v => Math.round(v * 100) + '%', row = (label, v, ink) => ({ label, value: Math.min(v, 1.1) * 100, text: pct(v), note: 'of its cool speed', ink });
   const rows = [row('Processor, all cores', h.cpu, 'sun')]; if (h.gpu != null) rows.push(row('Graphics chip', h.gpu, 'pink'));
   const pts = k => h.series.filter(p => p[k] != null).map(p => `${(p[0] / (h.soak * 60) * 600).toFixed(1)},${(150 - (Math.max(0.4, Math.min(1.1, p[k])) - 0.4) / 0.7 * 140).toFixed(1)}`).join(' ');
+  const col = k => (h.series || []).map(p => p[k]).filter(v => v > 0), first = k => col(k)[0], last = k => col(k)[col(k).length - 1];
+  const watts = k => first(k) ? h.series.filter(p => p[k] > 0).map(p => `${(p[0] / (h.soak * 60) * 600).toFixed(1)},${(150 - (Math.max(0.4, Math.min(1.1, p[k] / first(k))) - 0.4) / 0.7 * 140).toFixed(1)}`).join(' ') : '';
   const chart = h.mode === 'soak' && h.series && h.series.length > 2 ? `<svg class="heat-chart" viewBox="0 0 600 160" role="img" aria-label="Speed during the heat test, as a share of the speed at the start">
       <line x1="0" x2="600" y1="30" y2="30" class="hc-ref"/><text x="596" y="24" text-anchor="end" class="hc-t">100%</text><text x="596" y="146" text-anchor="end" class="hc-t">40% · ${h.soak} min</text>
-      <polyline points="${pts(1)}" class="hc-cpu"/>${h.gpu != null ? `<polyline points="${pts(2)}" class="hc-gpu"/>` : ''}</svg>
-      <p class="hint">Speed through the ${h.soak} minutes, with every core and the graphics chip loaded together: yellow is the processor, pink the graphics chip.</p>` : '';
+      <polyline points="${pts(1)}" class="hc-cpu"/>${h.gpu != null ? `<polyline points="${pts(2)}" class="hc-gpu"/>` : ''}
+      ${watts(3) ? `<polyline points="${watts(3)}" class="hc-cpu hc-w"/>` : ''}${watts(4) ? `<polyline points="${watts(4)}" class="hc-gpu hc-w"/>` : ''}</svg>
+      <p class="hint">Speed through the ${h.soak} minutes, with every core and the graphics chip loaded together: yellow is the processor, pink the graphics chip.${watts(3) || watts(4) ? ` The dashed lines are the power each drew, as a share of where it started${last(3) ? ` (processor ${fmt(first(3))} W, then ${fmt(last(3))} W at the end` : ' ('}${last(4) ? `${last(3) ? '; ' : ''}graphics chip ${fmt(first(4))} W, then ${fmt(last(4))} W` : ''}). A chip that cuts its power as it heats up is slowing itself down to stay cool.` : ''}</p>` : '';
   return `<div class="label">Heat</div><section class="block">
     <div class="lanes-head"><b>${h.mode === 'soak' ? `After ${h.soak} minutes at full load` : `After ${Math.max(1, Math.round(h.minutes))} minute${Math.round(h.minutes) > 1 ? 's' : ''} of testing`}</b><small>speed kept once warm</small></div>
     ${bars(rows, { ref: 100, max: 112, refText: '100% = no slowdown' })}${chart}
@@ -682,13 +709,18 @@ function devicesPage() {
   if (!P && cols.some(x => x.run.heat && x.run.heat.cpu != null)) {
     const h = k => cols.map(x => x.run.heat && x.run.heat[k] != null && !x.run.agg ? Math.round(x.run.heat[k] * 100) : null);
     rows.push({ head: 'Heat: speed kept once warm (latest run, not scored)' }, { name: 'Processor', sub: 'All cores', vals: h('cpu'), pct: true }, { name: 'Graphics chip', vals: h('gpu'), pct: true },
-      { name: 'Minutes of load', vals: cols.map(x => x.run.heat && !x.run.agg ? Math.round(x.run.heat.minutes) : null), plain: true });
+      { name: 'Minutes of load', vals: cols.map(x => x.run.heat && !x.run.agg ? Math.round(x.run.heat.minutes) : null), plain: true, nomark: true });
+  }
+  if (!P && cols.some(x => x.run.power && (x.run.power.cpuAll > 0 || x.run.power.gpu > 0))) {
+    const pw = k => cols.map(x => x.run.power && x.run.power[k] > 0 && !x.run.agg ? Math.round(x.run.power[k]) : null), ef = k => cols.map(x => { const v = !x.run.agg && efficiency(x.run)[k]; return v ? +v.toFixed(1) : null; });
+    rows.push({ head: 'Power: chip estimates (latest run, not scored)' }, { name: 'Processor watts', sub: 'All cores', vals: pw('cpuAll'), plain: true, nomark: true }, { name: 'Processor points per watt', sub: 'All cores', vals: ef('cpu'), plain: true },
+      { name: 'Graphics chip watts', vals: pw('gpu'), plain: true, nomark: true }, { name: 'Graphics chip points per watt', vals: ef('gpu'), plain: true });
   }
   const cell = (r, i) => {
     const v = r.vals[i], nums = r.vals.filter(x => x != null);
     if (v == null) return '<td class="r none">–</td>';
     const hi = Math.max(...nums), lo = Math.min(...nums), many = nums.length > 1 && hi !== lo;
-    const cls = many && state.marks.best && v === hi ? 'best' : many && state.marks.worst && v === lo ? 'worst' : '';
+    const cls = r.nomark ? '' : many && state.marks.best && v === hi ? 'best' : many && state.marks.worst && v === lo ? 'worst' : '';
     return `<td class="r ${cls}" ${r.tips && r.tips[i] ? `title="${esc(r.tips[i])}"` : ''}><span>${r.plain ? v : P || r.pct ? pc(v) : pts(v)}</span></td>`;
   };
   return `<nav class="crumbs"><a href="#home">← Results</a></nav>

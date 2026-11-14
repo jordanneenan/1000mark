@@ -367,6 +367,8 @@ impl Gpu {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { label: None, required_features: wgpu::Features::empty(), required_limits: wgpu::Limits::default(), memory_hints: Default::default() }, None)).map_err(|e| e.to_string())?;
         Ok(Some(Gpu { instance, adapter, device, queue, ai, scene: rt_scene() }))
     }
+    /// PCI vendor and device ids and the name, for finding the chip's power sensor.
+    pub fn ids(&self) -> (u32, u32, String) { (self.ai.vendor, self.ai.device, self.ai.name.clone()) }
     pub fn info(&self, ram: u64) -> Info {
         let ai = &self.ai;
         let others = self.instance.enumerate_adapters(wgpu::Backends::all()).into_iter().map(|a| a.get_info()).filter(|i| i.name != ai.name).map(|i| format!("{} ({:?})", i.name, i.backend)).collect::<std::collections::BTreeSet<_>>().into_iter().collect();

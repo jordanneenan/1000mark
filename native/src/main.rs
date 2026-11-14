@@ -3,6 +3,7 @@
 mod cpu;
 mod gpu;
 mod mem;
+mod power;
 mod storage;
 
 #[global_allocator]
@@ -210,12 +211,13 @@ fn handoff(text: &str, server: &str) -> Result<String, String> {
 /// a machine that slows down when hot shows it. Scores never change: this is reported beside them.
 const HEAT_CPU: &[&str] = &["zip", "physics", "matrix"];
 const HEAT_GPU: &[&str] = &["gpu_scene", "gpu_rays"];
-fn heat(sc: &Scorer, g: Option<&gpu::Gpu>, threads: usize, soak: Option<u64>, started: std::time::Instant) -> Value {
+fn heat(sc: &Scorer, g: Option<&gpu::Gpu>, pw: &power::Power, threads: usize, soak: Option<u64>, started: std::time::Instant) -> Value {
     let cold = |id: &str| sc.got.iter().find(|(k, _)| k == id).map(|(_, v)| *v).filter(|v| *v > 0.0);
     let mut series: Vec<Value> = Vec::new();
     if let Some(minutes) = soak {
         let t0 = std::time::Instant::now(); let (mut c0, mut g0) = (0.0, 0.0);
         while t0.elapsed().as_secs() < minutes * 60 {
+            let m = pw.mark();
             let (c, gf) = std::thread::scope(|s| {
                 let hs: Vec<_> = (0..threads).map(|_| s.spawn(|| { let mut w = cpu::make("matrix"); cpu::timed(4000, &mut *w) })).collect();
                 let gf = g.and_then(|g| g.once("gpu_scene", 4000).ok());
@@ -224,7 +226,8 @@ fn heat(sc: &Scorer, g: Option<&gpu::Gpu>, threads: usize, soak: Option<u64>, st
             if c0 == 0.0 { c0 = c; g0 = gf.unwrap_or(0.0); }
             let (cr, gr) = (c / c0, gf.filter(|_| g0 > 0.0).map(|x| x / g0));
             let el = t0.elapsed().as_secs();
-            series.push(json!([el, (cr * 1000.0).round() / 1000.0, gr.map(|x| (x * 1000.0).round() / 1000.0)]));
+            let (cw, gw) = pw.since(&m);       // watts through this stretch, after the speed so older readers of the series still work
+            series.push(json!([el, (cr * 1000.0).round() / 1000.0, gr.map(|x| (x * 1000.0).round() / 1000.0), cw, gw]));
             say(&format!("Heat test · {}:{:02} of {minutes}:00 · CPU at {:.0}%{}", el / 60, el % 60, cr * 100.0, gr.map(|x| format!(", GPU at {:.0}%", x * 100.0)).unwrap_or_default()));
         }
     }
@@ -280,22 +283,37 @@ fn main() {
 
     println!("\n  1000MARK {} · computer test\n  {cpu_name} · {cores} cores, {threads} threads · {:.0} GB RAM\n  Testing the drive that holds {shown_dir}\n  Leave the computer alone until it finishes (about three minutes; with --heat, about fifteen).", env!("CARGO_PKG_VERSION"), ram_gb(ram));
 
-    // Stopped part-way (Ctrl+C, a closed terminal)? Do not leave the storage test's 4 GB file behind.
-    { let tmp = dir.join(storage::TMP); let _ = ctrlc::set_handler(move || { let _ = std::fs::remove_dir_all(&tmp); println!("\n  Stopped."); std::process::exit(130); }); }
     // Anything else that is busy (a screensaver, a video, a backup) takes speed from the tests. Say so.
+    let mut errors = Map::new();
+    let g = match gpu::Gpu::open() {
+        Ok(Some(g)) => Some(g),
+        Ok(None) => { errors.insert("gpu".into(), json!("No graphics adapter was found that supports Vulkan, Metal or DirectX 12.")); None }
+        Err(e) => { errors.insert("gpu".into(), json!(e)); None }
+    };
+    // Power drawn by the processor and the graphics chip, where the system reports it. Not scored.
+    let (gv, gd, gn) = g.as_ref().map(|g| g.ids()).unwrap_or_default();
+    let pw = power::Power::new(gv, gd, &gn);
+    let mut watts = Map::new();
+    // Stopped part-way (Ctrl+C, a closed terminal)? Do not leave the storage test's 4 GB file or the power reader behind.
+    { let (tmp, stop) = (dir.join(storage::TMP), pw.stopper()); let _ = ctrlc::set_handler(move || { stop(); let _ = std::fs::remove_dir_all(&tmp); println!("\n  Stopped."); std::process::exit(130); }); }
+    let idle = pw.mark();
     sys.refresh_cpu_usage(); std::thread::sleep(std::time::Duration::from_millis(1500)); sys.refresh_cpu_usage();
+    { let (c, gw) = pw.since(&idle); if let Some(c) = c { watts.insert("cpuIdle".into(), json!(c)); } if let Some(gw) = gw { watts.insert("gpuIdle".into(), json!(gw)); } }
     let busy = (sys.global_cpu_usage() as f64 * 10.0).round() / 10.0;
     if busy > 8.0 { println!("\n  ! Other programs are using about {busy:.0}% of the processor. Close them and start again for a fair score."); }
 
     let mut sc = Scorer::new();
-    let mut errors = Map::new();
     let started = std::time::Instant::now();
 
     // ---------- CPU: one core, six threads (about what a game or a busy app keeps working), every thread ----------
     let six = threads.min(6);
+    let m = pw.mark();
     for t in cpu::TESTS { say(&format!("CPU · {t} · one core")); let v = cpu::single(t, ms); sc.show(&format!("c1_{t}"), v); }
+    if let Some(c) = pw.since(&m).0 { watts.insert("cpuOne".into(), json!(c)); }
     for t in cpu::TESTS { say(&format!("CPU · {t} · {six} threads")); let v = cpu::multi(t, ms, six); sc.show(&format!("c6_{t}"), v); }
+    let m = pw.mark();
     for t in cpu::TESTS { say(&format!("CPU · {t} · all {threads} threads")); let v = cpu::multi(t, ms, threads); sc.show(&format!("ca_{t}"), v); }
+    if let Some(c) = pw.since(&m).0 { watts.insert("cpuAll".into(), json!(c)); }
 
     // ---------- memory ----------
     say("Memory");
@@ -317,14 +335,10 @@ fn main() {
 
     // ---------- GPU ----------
     say("GPU");
-    let g = match gpu::Gpu::open() {
-        Ok(Some(g)) => Some(g),
-        Ok(None) => { errors.insert("gpu".into(), json!("No graphics adapter was found that supports Vulkan, Metal or DirectX 12.")); None }
-        Err(e) => { errors.insert("gpu".into(), json!(e)); None }
-    };
     let (mut gpu_name, mut gpus, mut vram) = (String::new(), vec![], None);
     if let Some(g) = &g {
         let mut compute_rays = None;
+        let m = pw.mark();
         for (id, label) in gpu::TESTS {
             say(label);
             match g.test(id, ms) { Ok(v) => { if *id == "gpu_rays" { compute_rays = Some(v); } sc.show(id, v) } Err(e) => { errors.insert((*id).into(), json!(e)); } }
@@ -333,6 +347,7 @@ fn main() {
         say("GPU · ray tracing (hardware)");
         let (hw, how) = g.hardware_rays(ms);
         if let Some(v) = hw.or(compute_rays) { sc.show("gpu_rt", v); }
+        if let Some(w) = pw.since(&m).1 { watts.insert("gpu".into(), json!(w)); }
         let i = g.info(ram);
         info.insert("gpuApi".into(), json!(format!("{} (native)", i.backend))); info.insert("gpuAdapter".into(), json!(format!("{} · {}", i.name, i.driver))); info.insert("gpuKind".into(), json!(i.kind)); info.insert("rayTracing".into(), json!(how));
         if let Some((_, shared)) = i.vram { info.insert("vramShared".into(), json!(shared)); }
@@ -345,10 +360,18 @@ fn main() {
 
     // ---------- heat: how much speed is left once the computer is hot ----------
     let soak = if has("--heat") { Some(val("--minutes").and_then(|m| m.parse().ok()).unwrap_or(12u64)) } else { None };
-    let heat = heat(&sc, g.as_ref(), threads, soak, started);
+    let heat = heat(&sc, g.as_ref(), &pw, threads, soak, started);
+    if !pw.cpu_source.is_empty() { watts.insert("cpuSource".into(), json!(pw.cpu_source)); }
+    if !pw.gpu_source.is_empty() { watts.insert("gpuSource".into(), json!(pw.gpu_source)); }
     print!("\r\x1b[2K");
     for (k, v) in &errors { println!("    ✗ {k}: {}", v.as_str().unwrap_or("")); }
     sc.summary();
+    if watts.contains_key("cpuAll") || watts.contains_key("gpu") {
+        let w = |k: &str| watts.get(k).and_then(|v| v.as_f64());
+        let cpu = w("cpuAll").map(|c| format!("the processor drew {c:.0} W on all cores{}", w("cpuIdle").map(|i| format!(" ({i:.0} W idle)")).unwrap_or_default()));
+        let gpu = w("gpu").map(|c| format!("the graphics chip {c:.0} W in its tests{}", w("gpuIdle").map(|i| format!(" ({i:.0} W idle)")).unwrap_or_default()));
+        println!("  Power: {}. Chip estimates, not scored.", [cpu, gpu].into_iter().flatten().collect::<Vec<_>>().join(", "));
+    }
     if let (Some(c), Some(m)) = (heat["cpu"].as_f64(), heat["minutes"].as_f64()) {
         let gpu = heat["gpu"].as_f64().map(|g| format!(", the GPU {:.0}%", g * 100.0)).unwrap_or_default();
         println!("  Heat: after {m:.0} minutes{} the CPU keeps {:.0}% of its speed{gpu}.{}\n", if soak.is_some() { " under full load" } else { " of testing" }, c * 100.0, if soak.is_some() { "" } else { "\n  Run with --heat for the full heat test (15 minutes)." });
@@ -365,7 +388,7 @@ fn main() {
         "device": { "native": true, "cpu": cpu_name, "physCores": cores, "cores": threads, "memoryBytes": ram, "memory": null,
                     "os": os, "arch": System::cpu_arch(), "browser": format!("1000Mark computer test {}", env!("CARGO_PKG_VERSION")), "model": cpu_name,
                     "gpu": gpu_name, "gpus": gpus, "disks": disk_json, "drives": drives(), "screen": "", "formFactor": form, "secure": true, "webgpu": true, "webcodecs": false },
-        "tests": tests, "errors": errors, "info": info, "heat": heat,
+        "tests": tests, "errors": errors, "info": info, "heat": heat, "power": watts,
     });
     let text = serde_json::to_string_pretty(&run).unwrap();
     if has("--show-data") { println!("  This is everything that is sent:\n\n{text}\n"); }
