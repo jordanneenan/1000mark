@@ -136,7 +136,7 @@ function unitBar(run) {
   if (!acct.on) return '';
   const n = peers(run).length, opt = (v, t) => `<option value="${v}" ${v === state.vs ? 'selected' : ''}>${esc(t)}</option>`;
   return `<section class="unit-bar">
-    <div class="seg" role="group" aria-label="Show scores as"><button class="${state.unit === 'points' ? 'on' : ''}" data-act="unit" data-id="points" aria-pressed="${state.unit === 'points'}">Points</button><button class="${state.unit === 'pct' ? 'on' : ''}" data-act="unit" data-id="pct" aria-pressed="${state.unit === 'pct'}">Percentile</button></div>
+    <div class="seg" role="group" aria-label="Show scores as"><button class="${state.unit !== 'pct' ? 'on' : ''}" data-act="unit" data-id="points" aria-pressed="${state.unit !== 'pct'}">Points</button><button class="${state.unit === 'pct' ? 'on' : ''}" data-act="unit" data-id="pct" aria-pressed="${state.unit === 'pct'}">Percentile</button></div>
     ${state.unit === 'pct' ? `<label>Compared with <select id="c-vs">${VS.map(x => opt(x.id, x.id === 'auto' ? `${x.name} (${vsName({ ...run, device: run.device })})` : x.name)).join('')}</select></label>
       <span class="unit-note">${!pop ? 'Everyone\'s scores could not be loaded.' : n ? `${n} machine${n > 1 ? 's' : ''} so far, ${run.native ? 'computer' : 'browser'} tests only. 50% is the middle; higher is faster.` : `No ${vsName(run)} have been tested with this test yet.`}</span>` : '<span class="unit-note">1000 points = the reference desktop. Switch to percentile to see where this sits among everyone else\'s machines.</span>'}
   </section>`;
@@ -694,6 +694,8 @@ function devicesPage() {
   const rows = [];
   rows.push({ head: 'Use cases' });
   const P = pctOn(), conv = (run, metric, v) => P ? pctile(run, metric, v) : v;
+  // "% of best": the best device in each row is 100% and the others are shown as a share of it.
+  const REL = state.unit === 'rel';
   for (const p of PROFILES) rows.push({ name: p.score, sub: p.name, big: true, vals: cols.map(c => conv(c.run, ['s', p.id], scoreRun(c.run, p).system)) });
   rows.push({ head: 'Parts' });
   for (const c of CATS) rows.push({ name: c.name, big: true, vals: cols.map(x => conv(x.run, ['c', c.id], scoreRun(x.run).cats[c.id])) });
@@ -725,6 +727,7 @@ function devicesPage() {
     if (v == null) return '<td class="r none">–</td>';
     const hi = Math.max(...nums), lo = Math.min(...nums), many = nums.length > 1 && hi !== lo;
     const cls = r.nomark ? '' : many && state.marks.best && v === hi ? 'best' : many && state.marks.worst && v === lo ? 'worst' : '';
+    if (REL && !r.pct && !r.nomark) return `<td class="r ${cls}" title="${esc(`${r.plain ? v : pts(v) + ' points'}${r.tips && r.tips[i] ? ' · ' + r.tips[i] : ''}`)}"><span>${hi > 0 ? Math.round(v / hi * 100) : 0}%</span></td>`;
     return `<td class="r ${cls}" ${r.tips && r.tips[i] ? `title="${esc(r.tips[i])}"` : ''}><span>${r.plain ? v : P || r.pct ? pc(v) : pts(v)}</span></td>`;
   };
   return `<nav class="crumbs"><a href="#home">← Results</a></nav>
@@ -752,14 +755,14 @@ function devicesPage() {
       <div class="picker">${gs.map(g => `<button class="mini ${picked.includes(g) ? 'on' : ''}" data-act="col" data-id="${esc(g.key)}" aria-pressed="${picked.includes(g)}">${esc(g.label)} · ${g.kind}</button>`).join('')}</div>
       <div class="cmp-opts">
         <label>Show <select id="c-stat">${STATS.map(x => opt(x.id, x.name, state.stat)).join('')}</select></label>
-        ${acct.on ? `<div class="seg" role="group" aria-label="Show scores as"><button class="${state.unit === 'points' ? 'on' : ''}" data-act="unit" data-id="points">Points</button><button class="${state.unit === 'pct' ? 'on' : ''}" data-act="unit" data-id="pct">Percentile</button></div>` : ''}
+        <div class="seg" role="group" aria-label="Show scores as">${[['points', 'Points'], ['rel', '% of best'], ...(acct.on ? [['pct', 'Percentile']] : [])].map(([id, t]) => { const on = id === 'pct' ? P : id === 'rel' ? REL : !P && !REL; return `<button class="${on ? 'on' : ''}" data-act="unit" data-id="${id}" aria-pressed="${on}">${t}</button>`; }).join('')}</div>
         ${P ? `<label>Against <select id="c-vs">${VS.map(x => opt(x.id, x.id === 'auto' ? 'Each device\'s own kind' : x.name, state.vs)).join('')}</select></label>` : ''}
         <label><input type="checkbox" data-mark="best" ${state.marks.best ? 'checked' : ''}> <span class="swatch best"></span> Mark the best</label>
         <label><input type="checkbox" data-mark="worst" ${state.marks.worst ? 'checked' : ''}> <span class="swatch worst"></span> Mark the lowest</label>
       </div>
-      ${cols.length ? `<div class="table-wrap"><table class="compare"><thead><tr><th>${P ? 'Percentile' : 'Points'}</th>${cols.map(c => `<th class="r">${esc(c.g.label)}<small>${kindName(c.g.kind)}${c.run.agg ? ` · ${c.run.agg.n} runs` : ''}</small></th>`).join('')}</tr></thead><tbody>
+      ${cols.length ? `<div class="table-wrap"><table class="compare"><thead><tr><th>${P ? 'Percentile' : REL ? '% of best' : 'Points'}</th>${cols.map(c => `<th class="r">${esc(c.g.label)}<small>${kindName(c.g.kind)}${c.run.agg ? ` · ${c.run.agg.n} runs` : ''}</small></th>`).join('')}</tr></thead><tbody>
         ${rows.map(r => r.head ? `<tr class="grp"><th colspan="${cols.length + 1}">${esc(r.head)}</th></tr>` : `<tr class="${r.big ? 'big' : ''}"><td>${esc(r.name)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</td>${r.vals.map((_, i) => cell(r, i)).join('')}</tr>`).join('')}
-      </tbody></table></div><p class="hint">1000 points = ${esc(REF_DEVICE)}. Hover a test's points to see the measured value. Browser tests share rows with the computer test's, but they measure the computer through a browser: compare like with like.</p>` : '<p class="hint">Pick at least one device above.</p>'}
+      </tbody></table></div><p class="hint">${REL ? 'In each row the best of the devices shown is 100% and the others are a share of it; hover a figure for its points. ' : ''}1000 points = ${esc(REF_DEVICE)}. Hover a test's points to see the measured value. Browser tests share rows with the computer test's, but they measure the computer through a browser: compare like with like.</p>` : '<p class="hint">Pick at least one device above.</p>'}
     </section>`;
 }
 
