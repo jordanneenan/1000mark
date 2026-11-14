@@ -371,3 +371,7 @@ footer .foot-link{font:700 11px var(--mono);text-transform:uppercase;letter-spac
 .block>:where(.cmd)+:where(*){margin-top:4px}
 .block>:not(.slotrow)+.slotrow{margin-top:10px}
 td .tag+small{margin-top:6px}
+
+/* The selected use case in the Capacity table */
+tr.on td{color:var(--mark)}
+tr.on td:first-child{padding-left:10px;box-shadow:inset 4px 0 0 var(--mark)}

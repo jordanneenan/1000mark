@@ -113,7 +113,21 @@ fn say(label: &str) { print!("\r\x1b[2K  ▓ {label}"); let _ = std::io::stdout(
 
 // ---------- scoring, read from the site's own scoring.js so the two never disagree ----------
 const SCORING: &str = include_str!("../../scoring.js");
-struct TestDef { cat: String, group: String, name: String, unit: String, div: f64, rf: Option<f64>, sqrt: bool }
+struct TestDef { cat: String, group: String, name: String, unit: String, div: f64, rf: Option<f64>, curve: Vec<(f64, f64)> }
+/// A size test's general-use curve, `curve: [[GB, points], ...]` on its line in scoring.js.
+fn curve(line: &str) -> Vec<(f64, f64)> {
+    let Some(i) = line.find(" curve: [[") else { return Vec::new() };
+    let rest = &line[i + 10..]; let rest = &rest[..rest.find("]]").unwrap_or(rest.len())];
+    rest.split("], [").filter_map(|p| { let (a, b) = p.split_once(',')?; Some((a.trim().parse().ok()?, b.trim().parse().ok()?)) }).collect()
+}
+/// Same as curvePoints() in scoring.js: straight lines between anchors on a doubling scale, flat past the last.
+fn curve_points(c: &[(f64, f64)], v: f64) -> f64 {
+    let a: Vec<(f64, f64)> = c.iter().map(|(s, p)| (s.log2(), *p)).collect(); let x = v.log2();
+    let last = a[a.len() - 1]; if x >= last.0 { return last.1; }
+    let mut i = 1; while i < a.len() - 1 && x > a[i].0 { i += 1; }
+    let ((x0, p0), (x1, p1)) = (a[i - 1], a[i]);
+    (p0 + (p1 - p0) * (x - x0) / (x1 - x0)).max(10.0)
+}
 fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let i = line.find(&format!(" {key}: "))? + key.len() + 3;
     let rest = &line[i..];
@@ -136,11 +150,11 @@ impl Scorer {
             let rest = format!(" {}", rest.trim_start().trim_start_matches('{'));
             let rf = if rest.contains("unscored: true") { None } else { field(&rest, "ref").and_then(|v| v.parse().ok()) };
             tests.insert(id.to_string(), TestDef { cat: field(&rest, "cat").unwrap_or("").into(), group: field(&rest, "group").unwrap_or("").into(), name: field(&rest, "name").unwrap_or(id).into(),
-                unit: field(&rest, "unit").unwrap_or("").into(), div: field(&rest, "div").and_then(|v| v.parse().ok()).unwrap_or(1.0), rf, sqrt: field(&rest, "scale") == Some("sqrt") });
+                unit: field(&rest, "unit").unwrap_or("").into(), div: field(&rest, "div").and_then(|v| v.parse().ok()).unwrap_or(1.0), rf, curve: curve(&rest) });
         }
         Scorer { tests, cats, got: Vec::new(), last: (String::new(), String::new()) }
     }
-    fn points(&self, id: &str, v: f64) -> Option<f64> { let t = self.tests.get(id)?; let r = t.rf?; if !(v > 0.0) { return None; } let x = v / t.div / r; Some(1000.0 * if t.sqrt { x.sqrt() } else { x }) }
+    fn points(&self, id: &str, v: f64) -> Option<f64> { let t = self.tests.get(id)?; let r = t.rf?; if !(v > 0.0) { return None; } if t.curve.len() > 1 { return Some(curve_points(&t.curve, v)); } Some(1000.0 * v / t.div / r) }
     /// Print one finished test as a permanent line, under a heading for its part and group.
     fn show(&mut self, id: &str, v: f64) {
         self.got.push((id.to_string(), v));
@@ -228,13 +242,16 @@ fn main() {
     let disk_json: Vec<Value> = disks.iter().filter(|d| d.total_space() > 0).map(|d| json!({ "fs": d.file_system().to_string_lossy(), "kind": format!("{:?}", d.kind()), "total": d.total_space(), "free": d.available_space(), "removable": d.is_removable() })).collect();
     let here = disks.iter().filter(|d| dir.starts_with(d.mount_point())).max_by_key(|d| d.mount_point().as_os_str().len());
 
-    println!("\n  1000MARK {} · computer test\n  {cpu_name} · {cores} cores, {threads} threads · {:.0} GB RAM\n  Testing the drive that holds {shown_dir}\n  Leave the computer alone until it finishes (about two minutes).", env!("CARGO_PKG_VERSION"), ram_gb(ram));
+    println!("\n  1000MARK {} · computer test\n  {cpu_name} · {cores} cores, {threads} threads · {:.0} GB RAM\n  Testing the drive that holds {shown_dir}\n  Leave the computer alone until it finishes (about three minutes).", env!("CARGO_PKG_VERSION"), ram_gb(ram));
 
     let mut sc = Scorer::new();
     let mut errors = Map::new();
 
     // ---------- CPU ----------
     for t in cpu::TESTS { say(&format!("CPU · {t} · one core")); let v = cpu::single(t, ms); sc.show(&format!("n_cpu_{t}"), v); }
+    // Six threads: about as many as a game or a busy app keeps working (fewer if the computer has fewer).
+    let six = threads.min(6);
+    for t in cpu::SIX { say(&format!("CPU · {t} · {six} threads")); let v = cpu::multi(t, ms, six); sc.show(&format!("n_cpu_6t_{t}"), v); }
     for t in cpu::TESTS { say(&format!("CPU · {t} · all {threads} threads")); let v = cpu::multi(t, ms, threads); sc.show(&format!("n_cpu_mt_{t}"), v); }
 
     // ---------- memory ----------
@@ -260,7 +277,7 @@ fn main() {
     let g = gpu::run(ms, |id, v| sc.show(id, v), |id, e| gpu_errs.push((id.into(), e)), say);
     for (k, v) in gpu_errs { errors.insert(k, json!(v)); }
     let (gpu_name, gpus) = match &g {
-        Some(i) => { info.insert("gpuApi".into(), json!(format!("{} (native)", i.backend))); info.insert("gpuAdapter".into(), json!(format!("{} · {}", i.name, i.driver))); info.insert("gpuKind".into(), json!(i.kind)); (i.name.clone(), i.others.clone()) }
+        Some(i) => { info.insert("gpuApi".into(), json!(format!("{} (native)", i.backend))); info.insert("gpuAdapter".into(), json!(format!("{} · {}", i.name, i.driver))); info.insert("gpuKind".into(), json!(i.kind)); info.insert("rayTracing".into(), json!(i.rt)); (i.name.clone(), i.others.clone()) }
         None => { errors.insert("gpu".into(), json!("No graphics adapter was found that supports Vulkan, Metal or DirectX 12.")); (String::new(), vec![]) }
     };
     // ---------- capacity (computer test only: a browser cannot see these) ----------

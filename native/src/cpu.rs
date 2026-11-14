@@ -6,6 +6,8 @@ use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
 pub const TESTS: &[&str] = &["int", "float", "matrix", "simd", "sort", "sha", "crypto", "compress"];
+/// The tests also run on six threads: the integer, float, vector, sorting and compression mix of a game or app.
+pub const SIX: &[&str] = &["int", "float", "simd", "sort", "compress"];
 pub type Work = Box<dyn FnMut() -> u64 + Send>;
 
 pub struct Lcg(pub u32);

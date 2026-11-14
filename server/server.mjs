@@ -223,6 +223,7 @@ function implausible(r) {
   const cores = d.cores; if (!Number.isInteger(cores) || cores < 1 || cores > 1024) return 'the thread count is not believable';
   for (const id of ids) { const p = scoreTest(id, tests[id]); if (p != null && p > 25000) return `${TESTS[id].name} is over 25 times the reference machine`; }
   for (const id of ids) { const t = TESTS[id]; if (t && t.pair && tests[t.pair] > 0 && tests[id] / tests[t.pair] > cores * 1.3) return `${t.name} on all cores is faster than ${cores} threads could be`; }
+  for (const id of ids) { const one = id.replace('_6t_', '_'); if (one !== id && tests[one] > 0 && tests[id] / tests[one] > Math.min(6, cores) * 1.3) return `${TESTS[id] ? TESTS[id].name : id} on six threads is faster than ${Math.min(6, cores)} threads could be`; }
   if (tests.n_mem_size != null && (!(d.memoryBytes > 0) || Math.abs(tests.n_mem_size - scoring.ramGB(d.memoryBytes)) > 2 || tests.n_mem_size > 4096)) return 'the memory size does not match the computer';
   if (tests.n_sto_total > 500000) return 'the drive size is not believable';
   const sys = scoreRun({ ...r, tests }).system; if (!sys) return 'it has no scored results';

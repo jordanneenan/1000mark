@@ -185,10 +185,15 @@ function buildSteps(rec, workers) {
   let cpu1, pool, mem;
   for (const t of ['int', 'float', 'matrix', 'sort', 'sha', 'crypto', 'compress', 'json', 'bigint'])
     steps.push({ id: 'cpu_' + t, cat: 'cpu', label: `CPU · ${TESTS['cpu_' + t].name.toLowerCase()} · one core`, run: async () => { cpu1 ||= workers.add(worker('cpu')); put('cpu_' + t, (await call(cpu1, { test: t, ms })).rate); } });
+  // Six threads: about as many as a game or a busy app keeps working (fewer if the device has fewer).
+  const pooled = () => (pool ||= Array.from({ length: state.device.cores }, () => workers.add(worker('cpu'))));
+  const six = Math.min(6, state.device.cores);
+  for (const t of ['int', 'float', 'matrix', 'sha'])
+    steps.push({ id: 'cpu_6t_' + t, cat: 'cpu', label: `CPU · ${TESTS['cpu_6t_' + t].name.toLowerCase()} · ${six} threads`, run: async () => {
+      const rs = await Promise.all(pooled().slice(0, six).map(w => call(w, { test: t, ms: ms * 1.5 }))); put('cpu_6t_' + t, rs.reduce((a, r) => a + r.rate, 0)); } });
   for (const t of ['int', 'float', 'matrix', 'sha'])
     steps.push({ id: 'cpu_mt_' + t, cat: 'cpu', label: `CPU · ${TESTS['cpu_mt_' + t].name.toLowerCase()} · all ${state.device.cores} threads`, run: async () => {
-      pool ||= Array.from({ length: state.device.cores }, () => workers.add(worker('cpu')));
-      const rs = await Promise.all(pool.map(w => call(w, { test: t, ms: ms * 1.5 }))); put('cpu_mt_' + t, rs.reduce((a, r) => a + r.rate, 0)); } });
+      const rs = await Promise.all(pooled().map(w => call(w, { test: t, ms: ms * 1.5 }))); put('cpu_mt_' + t, rs.reduce((a, r) => a + r.rate, 0)); } });
   const bytes = (state.device.memory && state.device.memory <= 2 ? 32 : 64) * 1048576;   // same block in quick and full, so they compare
   for (const t of ['write', 'read', 'copy', 'random', 'alloc'])
     steps.push({ id: 'mem_' + t, cat: 'memory', label: `Memory · ${TESTS['mem_' + t].name.toLowerCase()}`, run: async () => { mem ||= workers.add(worker('memory')); put('mem_' + t, (await call(mem, { test: t, ms, bytes })).rate); rec.info.memBlock = bytes; } });
@@ -517,10 +522,11 @@ function extras(cat, run, c) {
     const tag = (hw, sw) => hw ? '<span class="tag used">Hardware</span>' : sw ? '<span class="tag">Software</span>' : '<span class="tag off">No</span>';
     const other = Object.entries(TESTS).filter(([id, x]) => x.cat === 'gpu' && x.unscored && t[id]).map(([id, x]) => ({ label: x.name, value: t[id], note: 'fps', ink: id.includes('_enc_') ? 'pink' : 'mint', cmp: c && c.tests[id] }));
     if (d.native) return `<div class="label">Graphics chip</div><section class="block"><h2>${esc(d.gpu || 'Not found')}</h2><div class="sub">${esc(i.gpuApi || '')} · ${esc(i.gpuKind || '')} · ${esc((i.gpuAdapter || '').split(' · ').slice(1).join(' · '))}</div>
-      <p class="hint">Compute, drawing and transfer were tested directly through ${esc((i.gpuApi || 'the graphics driver').replace(' (native)', ''))}. Video encoding and decoding are not in the computer test yet; the browser test covers them.</p></section>`;
+      <p class="hint">Compute, drawing, ray tracing and transfer were tested directly through ${esc((i.gpuApi || 'the graphics driver').replace(' (native)', ''))}. Video encoding and decoding are not in the computer test yet; the browser test covers them.</p>
+      ${i.rayTracing ? `<p class="hint">${/^hardware/.test(i.rayTracing) ? 'The hardware ray-tracing test ran on the chip\'s ray-tracing units.' : 'No ray-tracing hardware was available to the test, so the compute result stands in for the hardware test. Either the chip has none, or the test cannot reach it yet: on Macs it cannot, even on M3 and later chips that have it, so treat this score as a lower bound there.'}</p>` : ''}</section>`;
     return `<div class="label">Graphics chip</div><section class="two-col">
       <div class="block"><h2>${esc(i.gpuApi || 'Not tested')}</h2><div class="sub">${esc(i.gpuAdapter || d.gpu || 'No adapter reported')}</div>
-        <p class="hint">${i.gpuApi === 'WebGPU' ? 'Full test: compute, drawing, transfer and video.' : i.gpuApi === 'WebGL2' ? 'This browser has no WebGPU, so only the drawing tests ran. Try a browser with WebGPU for the compute and transfer tests.' : 'The browser gave no access to the graphics chip.'}</p></div>
+        <p class="hint">${i.gpuApi === 'WebGPU' ? 'Full test: compute, drawing, ray tracing, transfer and video. Browsers cannot reach ray-tracing hardware, so rays are traced in a compute shader; the computer test also uses the hardware.' : i.gpuApi === 'WebGL2' ? 'This browser has no WebGPU, so only the drawing tests ran. Try a browser with WebGPU for the compute and transfer tests.' : 'The browser gave no access to the graphics chip.'}</p></div>
       <div class="block"><h2>Video codecs</h2><div class="sub">At 1080p. Hardware means the graphics chip does the work.</div>
         ${codecs.length ? `<div class="table-wrap"><table><thead><tr><th>Codec</th><th>Encode</th><th>Decode</th></tr></thead><tbody>${codecs.map(k => `<tr><td>${esc(k.name)}</td><td>${tag(k.encHW, k.encSW)}</td><td>${tag(k.decHW, k.decSW)}</td></tr>`).join('')}</tbody></table></div>` : '<p class="hint">This browser could not report its video codecs.</p>'}</div>
     </section>
@@ -535,7 +541,13 @@ function extras(cat, run, c) {
   }
   if (cat.id === 'memory') return `<p class="foot-note">Tested on a ${fmt((i.memBlock || 0) / 1048576)} MB block, much bigger than the processor's cache, so the numbers reflect the RAM itself. A browser cannot see how much memory is installed.</p>`;
   if (cat.id === 'storage-speed') return `<section class="block"><h2>Not scored in a browser</h2><p class="hint">These numbers come from a ${fmt((i.fileBytes || 0) / 1048576)} MB file in the browser's private storage. Browsers keep that storage in their own database and answer reads from memory, so they measure the browser more than the drive: in our own tests a laptop beat a desktop whose drive is much faster. They are shown here but left out of every score. <a href="#computer">The computer test</a> reads and writes the drive directly.</p></section>`;
-  if (cat.id === 'capacity' && d.native) return `<p class="foot-note">Four times the size scores twice the points, so size counts without drowning out speed. 1000 points is 32 GB of memory and a 4 TB drive. Only the drive that was tested counts.</p>`;
+  if (cat.id === 'capacity' && d.native) {
+    const SIZES = [['n_mem_size', 8, '8 GB'], ['n_mem_size', 16, '16 GB'], ['n_mem_size', 64, '64 GB'], ['n_mem_size', 256, '256 GB'], ['n_sto_total', 512, '512 GB drive'], ['n_sto_total', 16000, '16 TB drive']];
+    const pts = (id, p) => t[id] ? fmt(scoreTest(id, t[id], p)) : '–';
+    return `<div class="label">How the sizes count</div><section class="block"><p class="hint">Size has diminishing returns, and where it stops helping depends on the use case. 32 GB of memory and a 4 TB drive score 1000 everywhere. Below 8 GB of memory points fall away fast, because the computer starts swapping to the drive. Games barely use more than 16 GB and gain nothing past 32 GB, while virtual machines, simulations, local AI models and a server's files keep using more, each doubling worth less than the last. Only the drive that was tested counts.</p>
+      <div class="table-wrap"><table><thead><tr><th>Use case</th><th class="r">This computer: ${t.n_mem_size ? Math.round(t.n_mem_size) + ' GB' : 'memory'}</th><th class="r">${t.n_sto_total ? gb(t.n_sto_total * 1e9) + ' drive' : 'Drive'}</th>${SIZES.map(([id, v, l]) => `<th class="r">${l}</th>`).join('')}</tr></thead><tbody>
+      ${PROFILES.map(p => `<tr${p.id === profile().id ? ' class="on"' : ''}><td>${esc(p.name)}</td><td class="r">${pts('n_mem_size', p)}</td><td class="r">${pts('n_sto_total', p)}</td>${SIZES.map(([id, v]) => `<td class="r">${fmt(scoreTest(id, v, p))}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`;
+  }
   if (cat.id === 'capacity') return `<section class="block"><h2>Computer test only</h2><p class="hint">A browser cannot see how much memory is installed or how big the drive is, so browser runs have no Capacity score and their system score leaves it out. <a href="#computer">Run the computer test</a> to include it.</p></section>`;
   return '';
 }

@@ -76,6 +76,147 @@ struct VO { @builtin(position) pos: vec4<f32>, @location(0) c: vec3<f32> }
 }
 @fragment fn fs(i: VO) -> @location(0) vec4<f32> { return vec4<f32>(i.c, 1.0); }`;
 
+// Game-like scene: 2,000 lit, textured spheres of 2,048 triangles each, one draw call apiece with
+// its own uniforms (as a game sets per object), a depth buffer and a mipmapped texture, at 1080p.
+const SCENE = `
+struct Obj { pos: vec4<f32>, col: vec4<f32> }
+@group(0) @binding(0) var<uniform> obj: Obj;
+@group(0) @binding(1) var tex: texture_2d<f32>;
+@group(0) @binding(2) var smp: sampler;
+struct VO { @builtin(position) pos: vec4<f32>, @location(0) n: vec3<f32>, @location(1) uv: vec2<f32>, @location(2) w: vec3<f32> }
+@vertex fn vs(@builtin(vertex_index) vi: u32) -> VO {
+  let tri = vi / 3u; let corner = vi % 3u; let quad = tri / 2u; let second = tri % 2u;
+  var seg = quad % 32u; var ring = quad / 32u;
+  if (second == 0u) { if (corner == 1u) { seg = seg + 1u; } else if (corner == 2u) { ring = ring + 1u; } }
+  else { if (corner == 0u) { seg = seg + 1u; } else if (corner == 1u) { seg = seg + 1u; ring = ring + 1u; } else { ring = ring + 1u; } }
+  let th = f32(ring) / 32.0 * 3.14159265; let ph = f32(seg) / 32.0 * 6.2831853;
+  let n = vec3<f32>(sin(th) * cos(ph), cos(th), sin(th) * sin(ph));
+  let w = obj.pos.xyz + n * obj.pos.w;
+  let f = 1.7320508; let near = 0.1; let far = 200.0;
+  var o: VO;
+  o.pos = vec4<f32>(w.x * f / 1.7777778, w.y * f, w.z * far / (far - near) - near * far / (far - near), w.z);
+  o.n = n; o.uv = vec2<f32>(f32(seg) / 8.0, f32(ring) / 8.0); o.w = w;
+  return o;
+}
+@fragment fn fs(i: VO) -> @location(0) vec4<f32> {
+  let n = normalize(i.n); let v = normalize(-i.w);
+  let t = textureSample(tex, smp, i.uv).rgb * obj.col.rgb;
+  let l1 = normalize(vec3<f32>(0.5, 0.8, -0.3)); let l2 = normalize(vec3<f32>(-0.7, 0.2, -0.5));
+  let d = max(dot(n, l1), 0.0) * 0.8 + max(dot(n, l2), 0.0) * 0.35 + 0.1;
+  let s = pow(max(dot(n, normalize(l1 + v)), 0.0), 32.0) * 0.6;
+  return vec4<f32>(t * d + vec3<f32>(s), 1.0);
+}`;
+const SCENE_OBJS = 2000, SCENE_VERTS = 32 * 32 * 6, TEX = 512, TEX_MIPS = 10;
+// Object k: position and radius (pos.w) and a colour, the same in the browser and the computer test.
+function sceneObjects() {
+  const f = new Float32Array(SCENE_OBJS * 64);           // 256 bytes per object (uniform offset alignment)
+  for (let k = 0; k < SCENE_OBJS; k++) {
+    const gx = k % 50, gy = Math.floor(k / 50) % 8, gz = Math.floor(k / 400);
+    f.set([(gx - 24.5) * 1.25, (gy - 3.5) * 2.6, 22 + gz * 9 + (gx % 3), 1.2, 0.6 + 0.4 * ((k * 7) % 5) / 4, 0.6 + 0.4 * ((k * 3) % 7) / 6, 0.7, 1], k * 64);
+  }
+  return f;
+}
+// Texture level L: a checker with a fine diagonal pattern, worked out in whole numbers so both tests match.
+function texLevel(L) {
+  const s = TEX >> L, d = new Uint8Array(s * s * 4);
+  for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+    const X = x << L, Y = y << L, c = ((X >> 5) ^ (Y >> 5)) & 1, g = ((X + Y) >> 2) & 7, i = (y * s + x) * 4;
+    d[i] = 120 + c * 100 + g * 4; d[i + 1] = 90 + c * 60 + g * 8; d[i + 2] = 160 - c * 70 + g * 6; d[i + 3] = 255;
+  }
+  return d;
+}
+
+// Ray tracing: a 256 x 256 landscape (131,072 triangles) with a bounding-volume tree made by halving
+// the grid, so it is the same tree everywhere. One camera ray and one shadow ray per pixel at 1080p.
+const RT_GRID = 256;
+const terrainH = (x, z) => 6 * Math.sin(x * 0.05) * Math.cos(z * 0.07) + 3 * Math.sin(x * 0.13 + z * 0.11) + 1.5 * Math.sin(x * 0.31 - z * 0.27);
+export function rtScene() {
+  const G = RT_GRID, H = new Float32Array((G + 1) * (G + 1));
+  for (let z = 0; z <= G; z++) for (let x = 0; x <= G; x++) H[z * (G + 1) + x] = terrainH(x, z);
+  const verts = new Float32Array(G * G * 2 * 9), tris = new Float32Array(G * G * 2 * 12);
+  const nodeF = new Float32Array((G * G) * 8), nodeU = new Uint32Array(nodeF.buffer);
+  let nt = 0, nn = 0;
+  const P = (x, z) => [x, H[z * (G + 1) + x], z];
+  const emit = (a, b, c) => {
+    verts.set([...a, ...b, ...c], nt * 9);
+    tris.set([a[0], a[1], a[2], 0, b[0] - a[0], b[1] - a[1], b[2] - a[2], 0, c[0] - a[0], c[1] - a[1], c[2] - a[2], 0], nt * 12); nt++;
+  };
+  const build = (x0, z0, x1, z1) => {
+    const ni = nn++;
+    let lo, hi;
+    if ((x1 - x0) * (z1 - z0) <= 2) {
+      const first = nt;
+      for (let z = z0; z < z1; z++) for (let x = x0; x < x1; x++) { emit(P(x, z), P(x + 1, z), P(x + 1, z + 1)); emit(P(x, z), P(x + 1, z + 1), P(x, z + 1)); }
+      lo = [Infinity, Infinity, Infinity]; hi = [-Infinity, -Infinity, -Infinity];
+      for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) { const p = new Float32Array(P(x, z)); for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], p[k]); hi[k] = Math.max(hi[k], p[k]); } }
+      nodeU[ni * 8 + 3] = first; nodeU[ni * 8 + 7] = nt - first;
+    } else {
+      let r;
+      if (x1 - x0 >= z1 - z0) { const m = (x0 + x1) >> 1; build(x0, z0, m, z1); r = build(m, z0, x1, z1); }
+      else { const m = (z0 + z1) >> 1; build(x0, z0, x1, m); r = build(x0, m, x1, z1); }
+      const l = ni + 1;
+      lo = [0, 1, 2].map(k => Math.min(nodeF[l * 8 + k], nodeF[r * 8 + k])); hi = [0, 1, 2].map(k => Math.max(nodeF[l * 8 + 4 + k], nodeF[r * 8 + 4 + k]));
+      nodeU[ni * 8 + 3] = r; nodeU[ni * 8 + 7] = 0;
+    }
+    nodeF.set(lo, ni * 8); nodeF.set(hi, ni * 8 + 4);
+    return ni;
+  };
+  build(0, 0, G, G);
+  return { nodes: new Uint32Array(nodeU.buffer, 0, nn * 8), tris, verts, count: nt };
+}
+const RT_COMMON = `
+const W = 1920u; const H = 1080u;
+fn camRay(id: vec2<u32>) -> vec3<f32> {
+  let fwd = normalize(vec3<f32>(0.0, -60.0, 190.0)); let right = normalize(cross(vec3<f32>(0.0, 1.0, 0.0), fwd)); let up = cross(fwd, right);
+  let uv = (vec2<f32>(id) + 0.5) / vec2<f32>(f32(W), f32(H)) * 2.0 - 1.0;
+  let th = 0.41421356;
+  return normalize(fwd + right * uv.x * th * 1.7777778 - up * uv.y * th);
+}
+const CAM = vec3<f32>(128.0, 60.0, -30.0);
+const SUN = vec3<f32>(0.42426407, 0.56568542, 0.70710678);`;
+const RAYS = RT_COMMON + `
+struct Node { lo: vec4<f32>, hi: vec4<f32> }
+@group(0) @binding(0) var<storage, read> nodes: array<Node>;
+@group(0) @binding(1) var<storage, read> tris: array<vec4<f32>>;
+@group(0) @binding(2) var<storage, read_write> outp: array<u32>;
+fn triHit(o: vec3<f32>, d: vec3<f32>, i: u32) -> f32 {
+  let v0 = tris[3u * i].xyz; let e1 = tris[3u * i + 1u].xyz; let e2 = tris[3u * i + 2u].xyz;
+  let p = cross(d, e2); let det = dot(e1, p);
+  if (abs(det) < 1e-9) { return 1e30; }
+  let inv = 1.0 / det; let s = o - v0; let u = dot(s, p) * inv;
+  if (u < 0.0 || u > 1.0) { return 1e30; }
+  let q = cross(s, e1); let v = dot(d, q) * inv;
+  if (v < 0.0 || u + v > 1.0) { return 1e30; }
+  return dot(e2, q) * inv;
+}
+fn trace(o: vec3<f32>, d: vec3<f32>, anyHit: bool) -> f32 {
+  let inv = 1.0 / select(d, vec3<f32>(1e-9), abs(d) < vec3<f32>(1e-9));
+  var stack: array<u32, 32>; var sp = 1u; stack[0] = 0u; var best = 1e30; var steps = 0u;
+  loop {
+    if (sp == 0u || steps >= 8192u) { break; }
+    steps = steps + 1u; sp = sp - 1u;
+    let ni = stack[sp]; let n = nodes[ni];
+    let t0 = (n.lo.xyz - o) * inv; let t1 = (n.hi.xyz - o) * inv;
+    let tn = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), min(t0.z, t1.z));
+    let tf = min(min(max(t0.x, t1.x), max(t0.y, t1.y)), max(t0.z, t1.z));
+    if (tf < max(tn, 0.0) || tn >= best) { continue; }
+    let a = bitcast<u32>(n.lo.w); let cnt = bitcast<u32>(n.hi.w);
+    if (cnt > 0u) {
+      for (var i = 0u; i < min(cnt, 8u); i = i + 1u) { let t = triHit(o, d, a + i); if (t > 1e-4 && t < best) { best = t; if (anyHit) { return best; } } }
+    } else if (sp < 31u) { stack[sp] = a; stack[sp + 1u] = ni + 1u; sp = sp + 2u; }
+  }
+  return best;
+}
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+  if (id.x >= W || id.y >= H) { return; }
+  let d = camRay(id.xy);
+  let t = trace(CAM, d, false);
+  let p = CAM + d * min(t, 1000.0) + vec3<f32>(0.0, 0.01, 0.0);
+  let s = trace(p, SUN, true);
+  outp[id.y * W + id.x] = select(0u, 1u, t < 1e29) + select(0u, 2u, s < 1e29);
+}`;
+
 // ---------- WebGPU tests ----------
 const done = d => d.queue.onSubmittedWorkDone();
 
@@ -127,6 +268,52 @@ async function render(d, ms, code, instances, blend, unitsPerDraw) {
   return r / 1e6;
 }
 
+async function scene(d, ms) {
+  const fmt = 'rgba8unorm';
+  const color = d.createTexture({ size: [W, H], format: fmt, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+  const depth = d.createTexture({ size: [W, H], format: 'depth32float', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+  const tex = d.createTexture({ size: [TEX, TEX], format: fmt, mipLevelCount: TEX_MIPS, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  for (let L = 0; L < TEX_MIPS; L++) { const s = TEX >> L; d.queue.writeTexture({ texture: tex, mipLevel: L }, texLevel(L), { bytesPerRow: s * 4 }, [s, s]); }
+  const ubuf = d.createBuffer({ size: SCENE_OBJS * 256, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  d.queue.writeBuffer(ubuf, 0, sceneObjects());
+  const smp = d.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', addressModeU: 'repeat', addressModeV: 'repeat', maxAnisotropy: 8 });
+  const bgl = d.createBindGroupLayout({ entries: [
+    { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: 32 } },
+    { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: {} }, { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: {} }] });
+  const bind = d.createBindGroup({ layout: bgl, entries: [{ binding: 0, resource: { buffer: ubuf, size: 32 } }, { binding: 1, resource: tex.createView() }, { binding: 2, resource: smp }] });
+  const module = d.createShaderModule({ code: SCENE });
+  const pipe = await d.createRenderPipelineAsync({ layout: d.createPipelineLayout({ bindGroupLayouts: [bgl] }), vertex: { module, entryPoint: 'vs' }, fragment: { module, entryPoint: 'fs', targets: [{ format: fmt }] },
+    primitive: { topology: 'triangle-list', cullMode: 'back', frontFace: 'cw' }, depthStencil: { format: 'depth32float', depthWriteEnabled: true, depthCompare: 'less' } });
+  const cv = color.createView(), dv = depth.createView();
+  const r = await loop(ms, async k => {
+    const enc = d.createCommandEncoder();
+    for (let f = 0; f < k; f++) {
+      const p = enc.beginRenderPass({ colorAttachments: [{ view: cv, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0.5, g: 0.6, b: 0.7, a: 1 } }], depthStencilAttachment: { view: dv, depthLoadOp: 'clear', depthClearValue: 1, depthStoreOp: 'store' } });
+      p.setPipeline(pipe);
+      for (let o = 0; o < SCENE_OBJS; o++) { p.setBindGroup(0, bind, [o * 256]); p.draw(SCENE_VERTS); }
+      p.end();
+    }
+    d.queue.submit([enc.finish()]); await done(d); return k;
+  }, 64);
+  color.destroy(); depth.destroy(); tex.destroy(); ubuf.destroy();
+  return r;                                            // frames/s
+}
+
+async function rays(d, ms) {
+  const sc = rtScene(), S = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
+  const nodes = d.createBuffer({ size: sc.nodes.byteLength, usage: S }), tris = d.createBuffer({ size: sc.tris.byteLength, usage: S }), out = d.createBuffer({ size: W * H * 4, usage: GPUBufferUsage.STORAGE });
+  d.queue.writeBuffer(nodes, 0, sc.nodes); d.queue.writeBuffer(tris, 0, sc.tris);
+  const pipe = await d.createComputePipelineAsync({ layout: 'auto', compute: { module: d.createShaderModule({ code: RAYS }), entryPoint: 'main' } });
+  const bind = d.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [nodes, tris, out].map((buffer, binding) => ({ binding, resource: { buffer } })) });
+  const r = await loop(ms, async k => {
+    const enc = d.createCommandEncoder(), p = enc.beginComputePass(); p.setPipeline(pipe); p.setBindGroup(0, bind);
+    for (let i = 0; i < k; i++) p.dispatchWorkgroups(W / 8, Math.ceil(H / 8));
+    p.end(); d.queue.submit([enc.finish()]); await done(d); return k * 2 * W * H;
+  }, 256);
+  nodes.destroy(); tris.destroy(); out.destroy();
+  return r / 1e6;                                      // million rays/s
+}
+
 async function upload(d, ms) {
   const bytes = 16 * 1048576, data = new Uint8Array(bytes); for (let i = 0; i < bytes; i += 4096) data[i] = i & 255;
   const buf = d.createBuffer({ size: bytes, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE });
@@ -161,6 +348,8 @@ async function runWebGPU(ms, out, progress) {
     ['gpu_particles', 'GPU · particle compute', () => particles(device, ms)],
     ['gpu_fill', 'GPU · pixel shading', () => render(device, ms, FILL, 4, true, 4 * W * H)],
     ['gpu_geom', 'GPU · triangle throughput', () => render(device, ms, GEOM, 400000, false, 400000)],
+    ['gpu_scene', 'GPU · game-like scene', () => scene(device, ms)],
+    ['gpu_rays', 'GPU · ray tracing', () => rays(device, ms)],
     ['gpu_upload', 'GPU · upload', () => upload(device, ms)],
     ['gpu_readback', 'GPU · readback', () => readback(device, ms)],
   ];

@@ -932,7 +932,7 @@ checksum = "e8cf8e6a8aa66ce33f63993ffc4ea4271eb5b0530a9002db8455ea6050c77bfa"
 
 [[package]]
 name = "pressmark"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "libc",
  "open",
