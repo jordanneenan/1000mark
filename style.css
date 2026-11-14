@@ -288,6 +288,8 @@ table.compare th .hs{display:block;margin-top:6px;font:400 30px/1 var(--display)
   .table-wrap.pin table.compare thead th{position:sticky;top:0;z-index:2;background:var(--surface);box-shadow:0 4px 0 var(--line)}
 }
 table.compare td.r{padding-right:10px;padding-left:10px;white-space:nowrap}
+table.compare tr.grp.part td{padding-top:18px;padding-bottom:6px;font-size:17px;font-weight:700;vertical-align:bottom;border-bottom:4px solid var(--line)}
+table.compare tr.grp.part.off td{opacity:.42}
 table.compare tr.grp th{font-family:var(--display);font-weight:400;font-size:22px;letter-spacing:.02em;padding-top:18px}
 table.compare tr.big td{font-size:16px}
 table.compare td.none{opacity:.5}

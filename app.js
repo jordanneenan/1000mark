@@ -787,8 +787,6 @@ function devicesPage() {
   // "% of best": the best device in each row is 100% and the others are shown as a share of it.
   const REL = state.unit === 'rel';
   for (const p of PROFILES) rows.push({ key: 's:' + p.id, name: p.score, sub: p.name, big: true, vals: cols.map(c => conv(c.run, ['s', p.id], scoreRun(c.run, p).system)) });
-  rows.push({ head: 'Parts', key: 'g:parts' });
-  for (const c of CATS) rows.push({ key: 'c:' + c.id, name: c.name, big: true, vals: cols.map(x => conv(x.run, ['c', c.id], scoreRun(x.run).cats[c.id])) });
   for (const c of CATS) {
     const keys = [...new Set(Object.entries(TESTS).filter(([, t]) => t.cat === c.id && !t.unscored).map(([, t]) => `${t.group}|${t.name}`))];
     const order = [...new Set(keys.map(k => k.split('|')[0]))]; keys.sort((a, b) => order.indexOf(a.split('|')[0]) - order.indexOf(b.split('|')[0]));
@@ -800,7 +798,9 @@ function devicesPage() {
       }
       return vals.some(v => v != null) ? { key: `t:${c.id}|${k}`, name: k.split('|')[1], sub: k.split('|')[0], vals, tips } : null;
     }).filter(Boolean);
-    if (body.length) rows.push({ head: c.name, key: 'g:' + c.id }, ...body);
+    // The part's own score sits on its heading row, in line with the heading.
+    const vals = cols.map(x => conv(x.run, ['c', c.id], scoreRun(x.run).cats[c.id]));
+    if (body.length || vals.some(v => v != null)) rows.push({ head: c.name, key: 'g:' + c.id, part: 'c:' + c.id, vals }, ...body);
   }
   if (!P && cols.some(x => x.run.heat && x.run.heat.cpu != null)) {
     const h = k => cols.map(x => x.run.heat && x.run.heat[k] != null && !x.run.agg ? Math.round(x.run.heat[k] * 100) : null);
@@ -813,14 +813,14 @@ function devicesPage() {
       { key: 'p:gw', name: 'Graphics chip watts', vals: pw('gpu'), plain: true, nomark: true }, { key: 'p:ge', name: 'Graphics chip points per watt', vals: ef('gpu'), plain: true });
   }
   // Under each device's system score in the pinned head: its part scores, in the table's current unit.
-  const partLine = i => `<span class="hparts">${CATS.map(c => { const r = rows.find(x => x.key === 'c:' + c.id), v = r && r.vals[i]; if (v == null) return '';
+  const partLine = i => `<span class="hparts">${CATS.map(c => { const r = rows.find(x => x.part === 'c:' + c.id), v = r && r.vals[i]; if (v == null) return '';
     const hi = Math.max(...r.vals.filter(x => x != null)); return `<span><i>${esc(c.short)}</i>${P ? pc(v) : REL ? `${Math.round(v / hi * 100)}%` : pts(v)}</span>`; }).join('')}</span>`;
   // Each row belongs to the heading above it. Hidden rows go unless the table is being edited; a heading
   // whose rows are all hidden goes too.
-  let grp = null; for (const r of rows) { if (r.head) { grp = r; r.members = []; } else if (grp) { r.group = grp; grp.members.push(r.key); } }
+  let grp = null; for (const r of rows) { if (r.head) { grp = r; r.members = r.part ? [r.part] : []; } else if (grp) { r.group = grp; grp.members.push(r.key); } }
   const E = state.editTable, shown = r => !state.hidden.has(r.key);
   const view = E ? rows : rows.filter(r => r.head ? r.members.some(k => !state.hidden.has(k)) : shown(r));
-  const nHidden = rows.filter(r => !r.head && !shown(r)).length;
+  const nHidden = rows.filter(r => !r.head && !shown(r)).length + rows.filter(r => r.part && state.hidden.has(r.part)).length;
   const tick = (r, on, what) => `<input type="checkbox" class="row-tick" data-row="${esc(r.key)}" ${on ? 'checked' : ''} aria-label="Show ${esc(what)}">`;
   const cell = (r, i) => {
     const v = r.vals[i], nums = r.vals.filter(x => x != null);
@@ -864,7 +864,8 @@ function devicesPage() {
       ${cols.length ? `<div class="table-wrap${cols.length <= 7 ? ' pin' : ''}"><table class="compare"><thead><tr><th>${P ? 'Percentile' : REL ? '% of best' : 'Points'}<small>Overall: system score</small></th>${cols.map((c, i) => { const sys = rows.find(r => r.name === PROFILES[0].score), v = sys && sys.vals[i], hi = sys && Math.max(...sys.vals.filter(x => x != null));
           const mv = E && cols.length > 1 ? `<span class="col-move">${i > 0 ? `<button class="mini" data-act="col-move" data-id="${esc(c.g.key)}" data-dir="-1" aria-label="Move ${esc(c.g.label)} left">←</button>` : ''}${i < cols.length - 1 ? `<button class="mini" data-act="col-move" data-id="${esc(c.g.key)}" data-dir="1" aria-label="Move ${esc(c.g.label)} right">→</button>` : ''}</span>` : '';
           return `<th class="r">${mv}${esc(c.g.label)}<small>${kindName(c.g.kind)}${c.run.agg ? ` · ${c.run.agg.n} runs` : ''}</small><b class="hs">${v == null ? '–' : P ? pc(v) : REL ? `${Math.round(v / hi * 100)}%` : pts(v)}</b>${partLine(i)}</th>`; }).join('')}</tr></thead><tbody>
-        ${view.map(r => r.head ? `<tr class="grp"><th colspan="${cols.length + 1}">${E ? `<label class="tick-label">${tick(r, r.members.every(k => !state.hidden.has(k)), r.head)}${esc(r.head)}</label>` : esc(r.head)}</th></tr>`
+        ${view.map(r => r.head ? (() => { const label = E ? `<label class="tick-label">${tick(r, r.members.every(k => !state.hidden.has(k)), r.head)}${esc(r.head)}</label>` : esc(r.head);
+            return r.part && (E || !state.hidden.has(r.part)) ? `<tr class="grp part${E && state.hidden.has(r.part) ? ' off' : ''}"><th>${label}</th>${r.vals.map((_, i) => cell(r, i)).join('')}</tr>` : `<tr class="grp"><th colspan="${cols.length + 1}">${label}</th></tr>`; })()
           : `<tr class="${r.big ? 'big' : ''}${E && !shown(r) ? ' off' : ''}"><td>${E ? `<label class="tick-label">${tick(r, shown(r), r.name)}<span>${esc(r.name)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</span></label>` : `${esc(r.name)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}`}</td>${r.vals.map((_, i) => cell(r, i)).join('')}</tr>`).join('')}
       </tbody></table></div>${E ? `<p class="note y">Untick rows to hide them, use the arrows to move devices, then press Done editing. ${acct.user ? 'The layout is saved to your account.' : 'The layout is saved in this browser; sign in to keep it in your account.'}</p>` : ''}<p class="hint">${REL ? 'In each row the best of the devices shown is 100% and the others are a share of it; hover a figure for its points. ' : ''}1000 points = ${esc(REF_DEVICE)}. Hover a test's points to see the measured value. Browser tests share rows with the computer test's, but they measure the computer through a browser: compare like with like.</p>` : '<p class="hint">Pick at least one device above.</p>'}
     </section>`;
