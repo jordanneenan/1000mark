@@ -454,3 +454,6 @@ td .off{opacity:.6;font-weight:400}
 .bd-how{margin-top:16px}
 .bd-how summary{cursor:pointer;font:700 12px var(--mono);text-transform:uppercase;letter-spacing:.06em}
 .bd-how[open] summary{margin-bottom:14px}
+.bd-tip-rest{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;border-top:3px solid var(--line);padding-top:8px;font:700 11px var(--mono);text-transform:uppercase;letter-spacing:.05em}
+.bd-tip-rest>span{display:inline-flex;align-items:center;gap:5px}
+.bd-tip-rest .bd-svg{height:18px}

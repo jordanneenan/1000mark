@@ -142,19 +142,21 @@ const heldFor = since => {
   return h < 1 ? 'less than an hour' : h < 48 ? n(Math.floor(h), 'hour') : h < 24 * 14 ? n(Math.floor(h / 24), 'day') : h < 24 * 60 ? n(Math.floor(h / 168), 'week') : n(Math.floor(h / 730), 'month');
 };
 let tips = [];
-// The badges a username holds, one mark per tier with a count. Hovering or focusing one shows the card.
+// A username's best badge: one mark only. Hovering or focusing it shows the card, which lists the
+// badges of that tier and counts the rest (the account page lists them all).
 function badgesFor(user, { focus = true } = {}) {
   const list = (lb.badges || {})[user]; if (!list || !list.length) return '';
-  return `<span class="badges">${TIER_ORDER.map(t => {
-    const items = list.filter(b => b.tier === t); if (!items.length) return '';
-    tips.push({ user, tier: t, items });
-    const label = `${items.length > 1 ? items.length + ' ' : ''}${TIER[t].name} badge${items.length > 1 ? 's' : ''}: ${items.map(b => b.title.replace(/^[^·]*· /, '')).join(', ')}`;
-    return `<span class="badge t-${t}" data-tip="${tips.length - 1}" role="img" aria-label="${esc(label)}" ${focus ? 'tabindex="0"' : ''}>${medal(t)}${items.length > 1 ? `<b>×${items.length}</b>` : ''}</span>`;
-  }).join('')}</span>`;
+  const t = TIER_ORDER.find(x => list.some(b => b.tier === x)), items = list.filter(b => b.tier === t);
+  const rest = TIER_ORDER.filter(x => x !== t).map(x => [x, list.filter(b => b.tier === x).length]).filter(([, n]) => n);
+  tips.push({ user, tier: t, items, rest });
+  const label = `${TIER[t].name} badge: ${items.map(b => b.title.replace(/^[^·]*· /, '')).join(', ')}${rest.length ? `; also ${rest.map(([x, n]) => `${n} ${TIER[x].name.toLowerCase()}`).join(', ')}` : ''}`;
+  return `<span class="badges"><span class="badge t-${t}" data-tip="${tips.length - 1}" role="img" aria-label="${esc(label)}" ${focus ? 'tabindex="0"' : ''}>${medal(t)}</span></span>`;
 }
 function tipCard(tip) {
+  const date = since => new Date(since).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
   return `<div class="bd-tip-head"><span class="badge t-${tip.tier}">${medal(tip.tier)}</span><div><b>${esc(TIER[tip.tier].name)}${tip.items.length > 1 ? ` × ${tip.items.length}` : ''}</b><small>${esc(tip.user)}</small></div></div>
-    ${tip.items.map(b => `<div class="bd-tip-row"><b>${esc(b.title)}</b><span>${esc(b.why)}</span><small>Held for ${heldFor(b.since)} · since ${new Date(b.since).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}</small></div>`).join('')}`;
+    ${tip.items.map(b => `<div class="bd-tip-row"><b>${esc(b.title)}</b><span>${esc(b.why)}</span><small>Held for ${heldFor(b.since)} · since ${date(b.since)}</small></div>`).join('')}
+    ${tip.rest.length ? `<div class="bd-tip-rest">Also holds ${tip.rest.map(([x, n]) => `<span><span class="badge t-${x}">${medal(x)}</span>${n} ${TIER[x].name.toLowerCase()}</span>`).join('')}</div>` : ''}`;
 }
 const tipBox = document.createElement('div'); tipBox.className = 'bd-tip'; tipBox.id = 'bd-tip'; tipBox.setAttribute('role', 'tooltip'); tipBox.hidden = true;
 document.body.append(tipBox); document.body.insertAdjacentHTML('beforeend', BADGE_DEFS);
