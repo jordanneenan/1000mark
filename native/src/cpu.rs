@@ -34,8 +34,8 @@ pub fn median(mut v: Vec<f64>) -> f64 { v.sort_by(|a, b| a.total_cmp(b)); v[v.le
 /// Warm up once, then the middle of three timings.
 pub fn timed3(ms: u64, f: &mut dyn FnMut() -> u64) -> f64 { f(); median((0..REPS).map(|_| timed(ms, f)).collect()) }
 
-/// One thread.
-pub fn single(test: &str, ms: u64) -> f64 { let mut w = make(test); timed3(ms, &mut *w) }
+/// One thread (a thread of its own, so it runs under the same conditions as the other tiers).
+pub fn single(test: &'static str, ms: u64) -> f64 { multi(test, ms, 1) }
 
 /// `threads` threads at once; returns the summed rate (middle of three rounds, each started together).
 pub fn multi(test: &'static str, ms: u64, threads: usize) -> f64 { multi_with(move || make(test), ms, threads) }

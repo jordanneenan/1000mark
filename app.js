@@ -219,7 +219,7 @@ async function heatTest(rec, ws, minutes, say, started) {
   say('Heat · measuring again');
   const geo = v => v.length ? +Math.exp(v.reduce((a, x) => a + Math.log(x), 0) / v.length).toFixed(3) : null, cr = [];
   for (const t of HEAT_CPU) { const cold = rec.tests['ca_' + t]; if (!cold) continue; await Promise.all(ws.map(w => call(w, { cmd: 'prep', test: t }))); cr.push(await round(ws, MS) / TESTS['ca_' + t].div / cold); }
-  const hot = gpu ? await gpuOnce(HEAT_GPU, MS) : {};
+  const hot = gpu ? await gpuOnce(HEAT_GPU, MS, 3) : {};      // three timings, as when cool: the first also wakes the chip up
   return { mode: minutes ? 'soak' : 'end', soak: minutes || null, minutes: +((performance.now() - started) / 60000).toFixed(1), cpu: geo(cr), gpu: geo(HEAT_GPU.filter(id => hot[id] && rec.tests[id]).map(id => hot[id] / rec.tests[id])), series };
 }
 
@@ -233,7 +233,8 @@ function buildSteps(rec, workers, soak) {
     for (const t of CPU_TESTS) { const id = `${pre}_${t}`; steps.push({ id, cat: 'cpu', label: `CPU · ${TESTS[id].name.toLowerCase()} · ${what}`, run: async () => put(id, await measure(pooled(n), t)) }); }
   const bytes = (state.device.memory && state.device.memory <= 2 ? 32 : 64) * 1048576;
   for (const t of ['fill', 'read', 'copy', 'chase', 'alloc'])
-    steps.push({ id: 'm_' + t, cat: 'memory', label: `Memory · ${TESTS['m_' + t].name.toLowerCase()}`, run: async () => { put('m_' + t, await measure(pooled(1), t, bytes)); rec.info.memBlock = bytes; } });
+    // Random jumps need a table bigger than any processor cache (128 MB, as in the computer test).
+    steps.push({ id: 'm_' + t, cat: 'memory', label: `Memory · ${TESTS['m_' + t].name.toLowerCase()}`, run: async () => { put('m_' + t, await measure(pooled(1), t, t === 'chase' ? bytes * 4 : bytes)); rec.info.memBlock = bytes; } });
   const per = Math.max(4, Math.min(16, Math.floor(256 / cores))) * 1048576;
   steps.push({ id: 'm_copy_all', cat: 'memory', label: `Memory · copy on all ${cores} threads`, run: async () => { put('m_copy_all', await measure(pooled(cores), 'copy', per)); await Promise.all(pooled(cores).map(w => call(w, { cmd: 'free' }))); } });
   steps.push({ id: 'storage', cat: 'storage-speed', label: 'Storage', run: async (sub) => {
@@ -483,7 +484,7 @@ function problems(run) {
   const notes = [];
   if (!run.device.secure) notes.push('This page is not on a secure (https) address, so the browser blocked storage, GPU and video tests.');
   if (run.info.gpuApi === 'WebGL2') notes.push('This browser has no WebGPU, so the GPU was tested with the older WebGL2 drawing tests only: no compute or transfer tests.');
-  if (run.mode === 'quick') notes.push('This was a quick test, which is no longer offered. Its scores are less steady.');
+  if (run.info.busy > 8) notes.push(`Other programs were using about ${Math.round(run.info.busy)}% of the processor when this test started, so these scores may be lower than the computer can do. Close anything busy and run it again.`);
   if (!errs.length && !notes.length) return '';
   return `<div class="label">What could not be tested</div><section class="notes">
     ${notes.map(n => `<p class="note y">${esc(n)}</p>`).join('')}

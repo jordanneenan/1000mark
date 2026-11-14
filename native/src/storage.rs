@@ -46,6 +46,8 @@ fn open_direct(path: &Path, create: bool) -> io::Result<(File, bool)> {
     Ok((f, false))
 }
 
+/// The folder the test files live in while the test runs.
+pub const TMP: &str = ".1000mark-tmp";
 pub struct Outcome { pub file_bytes: u64, pub direct: bool }
 
 /// Random 4K requests from `threads` threads at once, each with its own file handle (a queue of 32
@@ -72,7 +74,7 @@ fn thrice(mut f: impl FnMut() -> io::Result<f64>) -> io::Result<f64> { Ok(median
 
 /// `free` is the free space on the drive: the test file is 4 GB, or a quarter of the free space if that is less.
 pub fn run(dir: &Path, free: u64, mut put: impl FnMut(&str, f64), mut say: impl FnMut(&str)) -> io::Result<Outcome> {
-    let tmp = dir.join(".1000mark-tmp");
+    let tmp = dir.join(TMP);
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp)?;
     let res = (|| -> io::Result<Outcome> {

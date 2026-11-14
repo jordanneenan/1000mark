@@ -12,7 +12,8 @@ const W = 1920, H = 1080;
 async function loop(ms, batch, maxK = 1024) {
   await batch(1);
   let k = 1;
-  for (;;) { const t = performance.now(); await batch(k); if (performance.now() - t >= 40 || k >= maxK) break; k *= 2; }
+  // Each size is timed twice and the quicker go trusted, so one hiccup cannot stop the search early.
+  for (;;) { let el = Infinity; for (let i = 0; i < 2; i++) { const t = performance.now(); await batch(k); el = Math.min(el, performance.now() - t); } if (el >= 40 || k >= maxK) break; k *= 2; }
   let units = 0, el = 0; const t0 = performance.now();
   do { units += await batch(k); el = performance.now() - t0; } while (el < ms);
   return units / (el / 1000);
@@ -349,13 +350,13 @@ const GPU_TESTS = {
   gpu_readback: ['GPU · readback', (d, ms) => readback(d, ms)],
 };
 // For the heat test: time some tests once each, on a device of their own. Returns { id: value }.
-export async function gpuOnce(ids, ms) {
+export async function gpuOnce(ids, ms, reps = 1) {
   const out = {};
   try {
     const adapter = navigator.gpu && await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
     if (!adapter) return out;
     const device = await adapter.requestDevice();
-    for (const id of ids) { try { out[id] = await GPU_TESTS[id][1](device, ms); } catch {} }
+    for (const id of ids) { try { out[id] = reps > 1 ? await thrice(() => GPU_TESTS[id][1](device, ms)) : await GPU_TESTS[id][1](device, ms); } catch {} }
     device.destroy();
   } catch {}
   return out;

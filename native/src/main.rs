@@ -5,6 +5,9 @@ mod gpu;
 mod mem;
 mod storage;
 
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use serde_json::{json, Map, Value};
 use std::io::Write;
 use std::path::PathBuf;
@@ -228,7 +231,7 @@ fn heat(sc: &Scorer, g: Option<&gpu::Gpu>, threads: usize, soak: Option<u64>, st
     say("Heat · measuring again");
     let geo = |v: Vec<f64>| if v.is_empty() { None } else { Some(((v.iter().map(|x| x.ln()).sum::<f64>() / v.len() as f64).exp() * 1000.0).round() / 1000.0) };
     let cpu_r = geo(HEAT_CPU.iter().filter_map(|t| { let c = cold(&format!("ca_{t}"))?; let t: &'static str = t; Some(cpu::multi(t, 400, threads) / c) }).collect());
-    let gpu_r = geo(HEAT_GPU.iter().filter_map(|id| { let c = cold(id)?; Some(g?.once(id, 700).ok()? / c) }).collect());
+    let gpu_r = geo(HEAT_GPU.iter().filter_map(|id| { let c = cold(id)?; Some(g?.test(id, 700).ok()? / c) }).collect());
     json!({ "mode": if soak.is_some() { "soak" } else { "end" }, "soak": soak, "minutes": (started.elapsed().as_secs_f64() / 6.0).round() / 10.0, "cpu": cpu_r, "gpu": gpu_r, "series": series })
 }
 
@@ -277,6 +280,13 @@ fn main() {
 
     println!("\n  1000MARK {} · computer test\n  {cpu_name} · {cores} cores, {threads} threads · {:.0} GB RAM\n  Testing the drive that holds {shown_dir}\n  Leave the computer alone until it finishes (about four minutes; with --heat, about sixteen).", env!("CARGO_PKG_VERSION"), ram_gb(ram));
 
+    // Stopped part-way (Ctrl+C, a closed terminal)? Do not leave the storage test's 4 GB file behind.
+    { let tmp = dir.join(storage::TMP); let _ = ctrlc::set_handler(move || { let _ = std::fs::remove_dir_all(&tmp); println!("\n  Stopped."); std::process::exit(130); }); }
+    // Anything else that is busy (a screensaver, a video, a backup) takes speed from the tests. Say so.
+    sys.refresh_cpu_usage(); std::thread::sleep(std::time::Duration::from_millis(1500)); sys.refresh_cpu_usage();
+    let busy = (sys.global_cpu_usage() as f64 * 10.0).round() / 10.0;
+    if busy > 8.0 { println!("\n  ! Other programs are using about {busy:.0}% of the processor. Close them and start again for a fair score."); }
+
     let mut sc = Scorer::new();
     let mut errors = Map::new();
     let started = std::time::Instant::now();
@@ -302,6 +312,7 @@ fn main() {
         info.insert("disk".into(), json!({ "fs": d.file_system().to_string_lossy(), "kind": format!("{:?}", d.kind()) }));
     }
     info.insert("diskPath".into(), json!(shown_dir));
+    info.insert("busy".into(), json!(busy));
     info.insert("memBlock".into(), json!(mem::BLOCK));
 
     // ---------- GPU ----------

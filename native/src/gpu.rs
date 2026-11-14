@@ -166,7 +166,9 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 fn gloop(ms: u64, max_k: u32, batch: &mut dyn FnMut(u32) -> u64) -> f64 {
     batch(1);
     let mut k = 1u32;
-    loop { let t = Instant::now(); batch(k); if t.elapsed().as_millis() >= 40 || k >= max_k { break; } k *= 2; }
+    // Double k until a batch takes 40 ms, timing each size twice and trusting the quicker go, so one
+    // hiccup cannot stop the search early and leave the test measuring round trips.
+    loop { let mut el = u128::MAX; for _ in 0..2 { let t = Instant::now(); batch(k); el = el.min(t.elapsed().as_millis()); } if el >= 40 || k >= max_k { break; } k *= 2; }
     let t0 = Instant::now(); let mut units = 0u64;
     loop { units += batch(k); let el = t0.elapsed(); if el.as_millis() as u64 >= ms { return units as f64 / el.as_secs_f64(); } }
 }

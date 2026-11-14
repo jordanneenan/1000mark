@@ -26,6 +26,9 @@ function cryptoTest() {
 async function prep(test, bytes) {
   run = null;
   if (test === 'crypto') { run = cryptoTest(); }
+  // Copying goes through the browser's own block copy. WebAssembly's copy instruction is a fifth of
+  // that speed in Chromium, which would measure the instruction and not the memory.
+  else if (test === 'copy') { if (wasm) wasm.k_free(); const src = new Uint8Array(bytes).fill(1), dst = new Uint8Array(bytes); run = () => { dst.set(src); return bytes; }; }
   else {
     const w = await load(), mem = MEM.indexOf(test), cpu = CPU.indexOf(test);
     if (mem < 0 && cpu < 0) throw new Error('Unknown test ' + test);
