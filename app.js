@@ -17,7 +17,7 @@ const siteUrl = () => /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? SIT
 const isCurrent = r => r && r.suite === SUITE;
 { const all = store.get('pressmark.runs', []), old = all.filter(r => !isCurrent(r));
   if (old.length) { store.set('pressmark.runs.pre1', [...store.get('pressmark.runs.pre1', []), ...old]); store.set('pressmark.runs', all.filter(isCurrent)); } }
-const state = { runs: store.get('pressmark.runs', []).map(normalise), old: store.get('pressmark.runs.pre1', []).length, showBrowser: store.get('pressmark.showBrowser', false), dev: null, cols: store.get('pressmark.cols', null), marks: store.get('pressmark.marks', { best: true, worst: true }), stat: store.get('pressmark.stat', 'latest'), pick: null, cmp: null, running: null, abort: false, device: null,
+const state = { runs: store.get('pressmark.runs', []).map(normalise), old: store.get('pressmark.runs.pre1', []).length, showBrowser: store.get('pressmark.showBrowser', false), hidden: new Set(store.get('pressmark.hidden', [])), editTable: false, dev: null, cols: store.get('pressmark.cols', null), marks: store.get('pressmark.marks', { best: true, worst: true }), stat: store.get('pressmark.stat', 'latest'), pick: null, cmp: null, running: null, abort: false, device: null,
   label: store.get('pressmark.label', ''), unit: store.get('pressmark.unit', 'points'), vs: store.get('pressmark.vs', 'auto'), profile: store.get('pressmark.profile', 'general'), theme: store.get('pressmark.theme', null) };
 const msg = e => String(e && e.message || e);
 
@@ -44,6 +44,7 @@ const pushRuns = async runs => { if (!acct.user || !runs.length) return; try { f
 const dropRuns = async ids => { if (!acct.user || !ids.length) return; try { await api('runs/delete', 'POST', { ids }); } catch (e) { acct.note = `Not removed from your account: ${msg(e)}`; render(); } };
 // After signing in: take the account's runs, and add any made on this browser that the account lacks.
 async function pullAccount() {
+  applyPrefs(acct.user && acct.user.prefs);
   const got = (await api('runs')).runs, runs = got.filter(isCurrent); runs.forEach(normalise); state.old = Math.max(state.old, got.length - runs.length);
   const have = new Set(runs.map(r => r.id)), fresh = state.runs.filter(r => !have.has(r.id));
   state.runs = [...runs, ...fresh]; save();
@@ -63,6 +64,20 @@ const catOf = id => CATS.find(c => c.id === id);
 const profile = () => PROFILES.find(p => p.id === state.profile) || PROFILES[0];
 const score = r => scoreRun(r, profile());
 const save = () => store.set('pressmark.runs', state.runs);
+// Compare-table layout (columns and their order, hidden rows): kept in this browser, and in the account
+// when signed in, so it follows the person to other devices. The account's copy wins on sign-in.
+let prefsTimer = null;
+function savePrefs() {
+  store.set('pressmark.cols', state.cols); store.set('pressmark.hidden', [...state.hidden]);
+  if (!acct.user) return;
+  clearTimeout(prefsTimer);
+  prefsTimer = setTimeout(() => api('prefs', 'POST', { prefs: { cols: state.cols, hidden: [...state.hidden] } }).catch(e => { acct.note = `Your table layout was not saved to your account: ${msg(e)}`; render(); }), 600);
+}
+function applyPrefs(p) {
+  if (!p) return;
+  if (Array.isArray(p.cols)) { state.cols = p.cols.length ? p.cols : null; store.set('pressmark.cols', state.cols); }
+  if (Array.isArray(p.hidden)) { state.hidden = new Set(p.hidden); store.set('pressmark.hidden', p.hidden); }
+}
 
 // Runs are grouped into devices by name, with app runs and browser runs kept apart
 // because they are different tests.
@@ -760,19 +775,20 @@ const FF = [['desktop', 'Desktop'], ['laptop', 'Laptop'], ['computer', 'Computer
 const ffOf = d => (d.sets[0].runs[0].device || {}).formFactor || 'computer';
 function devicesPage() {
   const devs = deviceList(), gs = groups();
-  const picked = state.cols ? gs.filter(g => state.cols.includes(g.key)) : gs.slice(0, 8);
+  // Columns appear in the order they were picked (and can be moved while editing the table).
+  const picked = state.cols ? state.cols.map(k => gs.find(g => g.key === k)).filter(Boolean) : gs.slice(0, 8);
   const cols = picked.map(g => ({ g, run: aggregate(g, state.stat) }));
   const opt = (v, t, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(t)}</option>`;
   // Rows: the use-case scores, the parts, then every test. App and browser tests that measure the same
   // thing share a row (same part, group and name), so the two kinds of test can be compared directly.
   const rows = [];
-  rows.push({ head: 'Use cases' });
+  rows.push({ head: 'Use cases', key: 'g:use' });
   const P = pctOn(), conv = (run, metric, v) => P ? pctile(run, metric, v) : v;
   // "% of best": the best device in each row is 100% and the others are shown as a share of it.
   const REL = state.unit === 'rel';
-  for (const p of PROFILES) rows.push({ name: p.score, sub: p.name, big: true, vals: cols.map(c => conv(c.run, ['s', p.id], scoreRun(c.run, p).system)) });
-  rows.push({ head: 'Parts' });
-  for (const c of CATS) rows.push({ name: c.name, big: true, vals: cols.map(x => conv(x.run, ['c', c.id], scoreRun(x.run).cats[c.id])) });
+  for (const p of PROFILES) rows.push({ key: 's:' + p.id, name: p.score, sub: p.name, big: true, vals: cols.map(c => conv(c.run, ['s', p.id], scoreRun(c.run, p).system)) });
+  rows.push({ head: 'Parts', key: 'g:parts' });
+  for (const c of CATS) rows.push({ key: 'c:' + c.id, name: c.name, big: true, vals: cols.map(x => conv(x.run, ['c', c.id], scoreRun(x.run).cats[c.id])) });
   for (const c of CATS) {
     const keys = [...new Set(Object.entries(TESTS).filter(([, t]) => t.cat === c.id && !t.unscored).map(([, t]) => `${t.group}|${t.name}`))];
     const order = [...new Set(keys.map(k => k.split('|')[0]))]; keys.sort((a, b) => order.indexOf(a.split('|')[0]) - order.indexOf(b.split('|')[0]));
@@ -782,20 +798,27 @@ function devicesPage() {
         const id = Object.keys(x.run.tests).find(i => TESTS[i] && !TESTS[i].unscored && `${TESTS[i].group}|${TESTS[i].name}` === k);
         vals.push(id ? conv(x.run, ['t', id], scoreRun(x.run).tests[id]) : null); tips.push(id ? `${fmt(x.run.tests[id])} ${TESTS[id].unit}` : '');
       }
-      return vals.some(v => v != null) ? { name: k.split('|')[1], sub: k.split('|')[0], vals, tips } : null;
+      return vals.some(v => v != null) ? { key: `t:${c.id}|${k}`, name: k.split('|')[1], sub: k.split('|')[0], vals, tips } : null;
     }).filter(Boolean);
-    if (body.length) rows.push({ head: c.name }, ...body);
+    if (body.length) rows.push({ head: c.name, key: 'g:' + c.id }, ...body);
   }
   if (!P && cols.some(x => x.run.heat && x.run.heat.cpu != null)) {
     const h = k => cols.map(x => x.run.heat && x.run.heat[k] != null && !x.run.agg ? Math.round(x.run.heat[k] * 100) : null);
-    rows.push({ head: 'Heat: speed kept once warm (latest run, not scored)' }, { name: 'Processor', sub: 'All cores', vals: h('cpu'), pct: true }, { name: 'Graphics chip', vals: h('gpu'), pct: true },
-      { name: 'Minutes of load', vals: cols.map(x => x.run.heat && !x.run.agg ? Math.round(x.run.heat.minutes) : null), plain: true, nomark: true });
+    rows.push({ head: 'Heat: speed kept once warm (latest run, not scored)', key: 'g:heat' }, { key: 'h:cpu', name: 'Processor', sub: 'All cores', vals: h('cpu'), pct: true }, { key: 'h:gpu', name: 'Graphics chip', vals: h('gpu'), pct: true },
+      { key: 'h:min', name: 'Minutes of load', vals: cols.map(x => x.run.heat && !x.run.agg ? Math.round(x.run.heat.minutes) : null), plain: true, nomark: true });
   }
   if (!P && cols.some(x => x.run.power && (x.run.power.cpuAll > 0 || x.run.power.gpu > 0))) {
     const pw = k => cols.map(x => x.run.power && x.run.power[k] > 0 && !x.run.agg ? Math.round(x.run.power[k]) : null), ef = k => cols.map(x => { const v = !x.run.agg && efficiency(x.run)[k]; return v ? +v.toFixed(1) : null; });
-    rows.push({ head: 'Power: chip estimates (latest run, not scored)' }, { name: 'Processor watts', sub: 'All cores', vals: pw('cpuAll'), plain: true, nomark: true }, { name: 'Processor points per watt', sub: 'All cores', vals: ef('cpu'), plain: true },
-      { name: 'Graphics chip watts', vals: pw('gpu'), plain: true, nomark: true }, { name: 'Graphics chip points per watt', vals: ef('gpu'), plain: true });
+    rows.push({ head: 'Power: chip estimates (latest run, not scored)', key: 'g:power' }, { key: 'p:cw', name: 'Processor watts', sub: 'All cores', vals: pw('cpuAll'), plain: true, nomark: true }, { key: 'p:ce', name: 'Processor points per watt', sub: 'All cores', vals: ef('cpu'), plain: true },
+      { key: 'p:gw', name: 'Graphics chip watts', vals: pw('gpu'), plain: true, nomark: true }, { key: 'p:ge', name: 'Graphics chip points per watt', vals: ef('gpu'), plain: true });
   }
+  // Each row belongs to the heading above it. Hidden rows go unless the table is being edited; a heading
+  // whose rows are all hidden goes too.
+  let grp = null; for (const r of rows) { if (r.head) { grp = r; r.members = []; } else if (grp) { r.group = grp; grp.members.push(r.key); } }
+  const E = state.editTable, shown = r => !state.hidden.has(r.key);
+  const view = E ? rows : rows.filter(r => r.head ? r.members.some(k => !state.hidden.has(k)) : shown(r));
+  const nHidden = rows.filter(r => !r.head && !shown(r)).length;
+  const tick = (r, on, what) => `<input type="checkbox" class="row-tick" data-row="${esc(r.key)}" ${on ? 'checked' : ''} aria-label="Show ${esc(what)}">`;
   const cell = (r, i) => {
     const v = r.vals[i], nums = r.vals.filter(x => x != null);
     if (v == null) return '<td class="r none">–</td>';
@@ -833,11 +856,14 @@ function devicesPage() {
         ${P ? `<label>Against <select id="c-vs">${VS.map(x => opt(x.id, x.id === 'auto' ? 'Each device\'s own kind' : x.name, state.vs)).join('')}</select></label>` : ''}
         <label><input type="checkbox" data-mark="best" ${state.marks.best ? 'checked' : ''}> <span class="swatch best"></span> Mark the best</label>
         <label><input type="checkbox" data-mark="worst" ${state.marks.worst ? 'checked' : ''}> <span class="swatch worst"></span> Mark the lowest</label>
+        ${cols.length ? `<button class="mini ${E ? 'on' : ''}" data-act="edit-table" aria-pressed="${E}">${E ? 'Done editing' : `Edit table${nHidden ? ` · ${nHidden} hidden` : ''}`}</button>${E && nHidden ? '<button class="mini" data-act="show-rows">Show all rows</button>' : ''}` : ''}
       </div>
       ${cols.length ? `<div class="table-wrap${cols.length <= 7 ? ' pin' : ''}"><table class="compare"><thead><tr><th>${P ? 'Percentile' : REL ? '% of best' : 'Points'}<small>Overall: system score</small></th>${cols.map((c, i) => { const sys = rows.find(r => r.name === PROFILES[0].score), v = sys && sys.vals[i], hi = sys && Math.max(...sys.vals.filter(x => x != null));
-          return `<th class="r">${esc(c.g.label)}<small>${kindName(c.g.kind)}${c.run.agg ? ` · ${c.run.agg.n} runs` : ''}</small><b class="hs">${v == null ? '–' : P ? pc(v) : REL ? `${Math.round(v / hi * 100)}%` : pts(v)}</b></th>`; }).join('')}</tr></thead><tbody>
-        ${rows.map(r => r.head ? `<tr class="grp"><th colspan="${cols.length + 1}">${esc(r.head)}</th></tr>` : `<tr class="${r.big ? 'big' : ''}"><td>${esc(r.name)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</td>${r.vals.map((_, i) => cell(r, i)).join('')}</tr>`).join('')}
-      </tbody></table></div><p class="hint">${REL ? 'In each row the best of the devices shown is 100% and the others are a share of it; hover a figure for its points. ' : ''}1000 points = ${esc(REF_DEVICE)}. Hover a test's points to see the measured value. Browser tests share rows with the computer test's, but they measure the computer through a browser: compare like with like.</p>` : '<p class="hint">Pick at least one device above.</p>'}
+          const mv = E && cols.length > 1 ? `<span class="col-move">${i > 0 ? `<button class="mini" data-act="col-move" data-id="${esc(c.g.key)}" data-dir="-1" aria-label="Move ${esc(c.g.label)} left">←</button>` : ''}${i < cols.length - 1 ? `<button class="mini" data-act="col-move" data-id="${esc(c.g.key)}" data-dir="1" aria-label="Move ${esc(c.g.label)} right">→</button>` : ''}</span>` : '';
+          return `<th class="r">${mv}${esc(c.g.label)}<small>${kindName(c.g.kind)}${c.run.agg ? ` · ${c.run.agg.n} runs` : ''}</small><b class="hs">${v == null ? '–' : P ? pc(v) : REL ? `${Math.round(v / hi * 100)}%` : pts(v)}</b></th>`; }).join('')}</tr></thead><tbody>
+        ${view.map(r => r.head ? `<tr class="grp"><th colspan="${cols.length + 1}">${E ? `<label class="tick-label">${tick(r, r.members.every(k => !state.hidden.has(k)), r.head)}${esc(r.head)}</label>` : esc(r.head)}</th></tr>`
+          : `<tr class="${r.big ? 'big' : ''}${E && !shown(r) ? ' off' : ''}"><td>${E ? `<label class="tick-label">${tick(r, shown(r), r.name)}<span>${esc(r.name)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}</span></label>` : `${esc(r.name)}${r.sub ? `<small>${esc(r.sub)}</small>` : ''}`}</td>${r.vals.map((_, i) => cell(r, i)).join('')}</tr>`).join('')}
+      </tbody></table></div>${E ? `<p class="note y">Untick rows to hide them, use the arrows to move devices, then press Done editing. ${acct.user ? 'The layout is saved to your account.' : 'The layout is saved in this browser; sign in to keep it in your account.'}</p>` : ''}<p class="hint">${REL ? 'In each row the best of the devices shown is 100% and the others are a share of it; hover a figure for its points. ' : ''}1000 points = ${esc(REF_DEVICE)}. Hover a test's points to see the measured value. Browser tests share rows with the computer test's, but they measure the computer through a browser: compare like with like.</p>` : '<p class="hint">Pick at least one device above.</p>'}
     </section>`;
 }
 
@@ -1003,7 +1029,10 @@ app.addEventListener('click', e => {
     api('leaderboard', 'POST', { run: r }).then(() => loadBoard()).catch(err => { acct.note = msg(err); }).finally(render);
   }
   else if (act === 'lb-del') { b.disabled = true; api('leaderboard/delete', 'POST', { id }).then(() => loadBoard()).catch(err => { acct.note = msg(err); }).finally(render); }
-  else if (act === 'col') { const all = groups().map(g => g.key); let cur = state.cols ? state.cols.filter(k => all.includes(k)) : all.slice(0, 8); cur = cur.includes(id) ? cur.filter(k => k !== id) : [...cur, id]; state.cols = cur; store.set('pressmark.cols', cur); render(); }
+  else if (act === 'col') { const all = groups().map(g => g.key); let cur = state.cols ? state.cols.filter(k => all.includes(k)) : all.slice(0, 8); cur = cur.includes(id) ? cur.filter(k => k !== id) : [...cur, id]; state.cols = cur; savePrefs(); render(); }
+  else if (act === 'col-move') { const cur = [...(state.cols || groups().map(g => g.key).slice(0, 8))], i = cur.indexOf(id), j = i + +b.dataset.dir; if (i < 0 || j < 0 || j >= cur.length) return; [cur[i], cur[j]] = [cur[j], cur[i]]; state.cols = cur; savePrefs(); render(); }
+  else if (act === 'edit-table') { state.editTable = !state.editTable; render(); }
+  else if (act === 'show-rows') { state.hidden = new Set(); savePrefs(); render(); }
   else if (act === 'cancel') { state.abort = true; b.textContent = 'Stopping after this test'; b.disabled = true; }
   else if (act === 'signout') { api('logout', 'POST', {}).catch(() => {}).finally(() => { acct.user = null; acct.keys = []; acct.newKey = ''; acct.board = new Set(); lb.entries = null; state.runs = []; save(); acct.note = 'Signed out. Your runs are safe in your account.'; location.hash = 'signin'; render(); }); }
   else if (act === 'key-del') { api('keys/delete', 'POST', { id }).then(async () => { acct.keys = (await api('keys')).keys; acct.newKey = ''; render(); }).catch(err => { acct.note = msg(err); render(); }); }
@@ -1023,7 +1052,7 @@ app.addEventListener('click', e => {
     const list = state.runs.filter(r => (r.label || 'Unnamed device') === id);
     for (const r of list) r.label = name;
     if (state.label === id) { state.label = name; store.set('pressmark.label', name); }
-    if (state.cols) { state.cols = state.cols.map(k => k.split('|')[0] === id ? `${name}|${k.split('|')[1]}` : k); store.set('pressmark.cols', state.cols); }
+    if (state.cols) { state.cols = state.cols.map(k => k.split('|')[0] === id ? `${name}|${k.split('|')[1]}` : k); savePrefs(); }
     if (state.dev && state.dev.split('|')[0] === id) state.dev = `${name}|${state.dev.split('|')[1]}`;
     state.cmp = null; save(); pushRuns(list); render();
   }
@@ -1043,6 +1072,12 @@ app.addEventListener('change', async e => {
     save(); pushRuns(list); render();
   }
   if (t.id === 'show-browser') { state.showBrowser = t.checked; store.set('pressmark.showBrowser', t.checked); state.dev = null; state.pick = null; state.cmp = null; state.cols = null; render(); }
+  if (t.classList.contains('row-tick')) {
+    const key = t.dataset.row;
+    if (key.startsWith('g:')) { const box = t.closest('table'), members = [...box.querySelectorAll('.row-tick')].map(x => x.dataset.row); const i = members.indexOf(key); for (const k of members.slice(i + 1)) { if (k.startsWith('g:')) break; if (t.checked) state.hidden.delete(k); else state.hidden.add(k); } }
+    else if (t.checked) state.hidden.delete(key); else state.hidden.add(key);
+    savePrefs(); render(); return;
+  }
   if (t.id === 'lb-rank') { lb.rank = t.value; render(); }
   if (t.id === 'lb-dedupe') { lb.dedupe = t.checked; render(); }
   if (t.dataset.mark) { state.marks = { ...state.marks, [t.dataset.mark]: t.checked }; store.set('pressmark.marks', state.marks); render(); }

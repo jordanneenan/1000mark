@@ -89,6 +89,8 @@ if (db.prepare("SELECT 1 FROM pragma_table_info('users') WHERE name = 'email'").
   db.exec('VACUUM');                                                     // drop the old plain-text pages from the file
 }
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_username ON users (username COLLATE NOCASE)');
+// Page preferences kept with the account (compare-table columns and hidden rows), as JSON.
+if (!q('PRAGMA table_info(users)').all().some(c => c.name === 'prefs')) db.exec('ALTER TABLE users ADD COLUMN prefs TEXT');
 let secret = q('SELECT v FROM meta WHERE k = ?').get('secret')?.v;
 if (!secret) { secret = crypto.randomBytes(32).toString('hex'); q('INSERT INTO meta (k, v) VALUES (?, ?)').run('secret', secret); }
 
@@ -176,7 +178,8 @@ function startSession(res, userId) {
   q('INSERT INTO sessions (token_hash, user_id, created, expires) VALUES (?, ?, ?, ?)').run(sha(token), userId, Date.now(), Date.now() + SESSION_DAYS * 864e5);
   return { 'Set-Cookie': cookie(token, SESSION_DAYS * 86400) };
 }
-const publicUser = u => ({ email: u.email || openEmail(u.email_enc), name: u.username || u.name, username: u.username || null, created: u.created, runs: q('SELECT COUNT(*) AS n FROM runs WHERE user_id = ?').get(u.id).n });
+const readPrefs = id => { try { return JSON.parse(q('SELECT prefs FROM users WHERE id = ?').get(id)?.prefs || 'null'); } catch { return null; } };
+const publicUser = u => ({ email: u.email || openEmail(u.email_enc), name: u.username || u.name, username: u.username || null, created: u.created, runs: q('SELECT COUNT(*) AS n FROM runs WHERE user_id = ?').get(u.id).n, prefs: readPrefs(u.id) });
 const RESERVED = /^(admin|administrator|root|pressmark|1000mark|thousandmark|support|help|system|moderator|mod|staff|anonymous|null|undefined)$/i;
 function cleanUsername(n) {
   n = String(n || '').trim();
@@ -506,6 +509,15 @@ async function api(req, res, route) {
     const b = await readJson(req, 100e3); if (!Array.isArray(b.ids)) throw new Fail(400, 'Send a list of run ids.');
     const del = q('DELETE FROM runs WHERE user_id = ? AND id = ?'); let n = 0; for (const id of b.ids.slice(0, 2000)) n += del.run(user.id, String(id)).changes;
     return send(res, 200, { deleted: n });
+  }
+  // Page preferences: which devices the compare table shows and in what order, and which rows it hides.
+  if (route === 'prefs' && method === 'POST') {
+    const b = await readJson(req, 40e3), p = b.prefs && typeof b.prefs === 'object' ? b.prefs : {};
+    if (!allow('prefs:' + user.id, 240, 3600e3)) throw new Fail(429, 'Too many changes. Try again later.');
+    const list = (v, n, len) => Array.isArray(v) ? v.filter(x => typeof x === 'string' && x.length <= len).slice(0, n) : null;
+    const clean = { cols: list(p.cols, 60, 200), hidden: list(p.hidden, 600, 160) || [] };
+    q('UPDATE users SET prefs = ? WHERE id = ?').run(JSON.stringify(clean), user.id);
+    return send(res, 200, { prefs: clean });
   }
   if (route === 'username' && method === 'POST') {
     const b = await readJson(req, 5e3), username = cleanUsername(b.username);
