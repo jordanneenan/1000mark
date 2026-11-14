@@ -23,7 +23,7 @@ export const CATS = [
   { id: 'gpu', name: 'GPU speed', short: 'GPU', weight: 0.25, ink: 'pink', blurb: 'Graphics chip: number-crunching, drawing (including a game-like scene), ray tracing, moving data, and video encoding and decoding.' },
   { id: 'memory', name: 'Memory speed', short: 'Memory', weight: 0.15, ink: 'mint', blurb: 'How fast RAM can be filled, read, copied and jumped around in.' },
   { id: 'storage-speed', name: 'Storage speed', short: 'Storage', weight: 0.25, ink: 'ink', blurb: 'How fast the drive writes and reads files: big streams, small scattered pieces one at a time and 32 at once, and lots of little files.' },
-  { id: 'capacity', name: 'Capacity', short: 'Capacity', weight: 0.12, ink: 'sun', blurb: 'How much memory, graphics memory and storage the computer has. Measured by the computer test only: a browser cannot see them.' },
+  { id: 'capacity', name: 'Capacity', short: 'Capacity', weight: 0.10, ink: 'sun', blurb: 'How much memory, graphics memory and drive space the computer has. Memory counts everywhere; graphics memory where the work uses it; drive space only for a server. Measured by the computer test only.' },
 ];
 
 // div turns the raw rate into the display unit. Sizes (curve) score through a curve of [GB, points]
@@ -114,8 +114,8 @@ export const TESTS = {
   vid_dec_av1:  { cat: 'gpu', group: 'Video', name: 'AV1 decode 1080p', unit: 'fps', unscored: true },
 
   sz_ram:   { cat: 'capacity', group: 'Memory', name: 'Memory size', unit: 'GB', ref: 32, curve: [[2, 40], [4, 150], [8, 550], [16, 880], [32, 1000], [64, 1050], [128, 1080]], what: 'Installed RAM. 8 GB is the least that runs today\'s apps comfortably; past 32 GB everyday use hardly notices.' },
-  sz_drive: { cat: 'capacity', group: 'Storage', name: 'Drive size', unit: 'GB', ref: 4000, curve: [[64, 150], [128, 330], [256, 560], [512, 780], [1000, 900], [2000, 970], [4000, 1000]], what: 'Total size of the drive that was tested.' },
-  sz_vram:  { cat: 'capacity', group: 'Graphics memory', name: 'Graphics memory', unit: 'GB', ref: 10, curve: [[1, 250], [2, 450], [4, 700], [8, 950], [10, 1000], [16, 1060], [24, 1100]], what: 'Memory the graphics chip can use: its own, or half the system\'s where the two are shared. It decides which games and AI models fit at all.' },
+  sz_drive: { cat: 'capacity', group: 'Storage', name: 'Drive size', unit: 'GB', general: 0, ref: 4000, curve: [[64, 150], [128, 330], [256, 560], [512, 780], [1000, 900], [2000, 970], [4000, 1000]], what: 'Total size of the drive that was tested. It counts only towards the server score: more space does not make a computer faster, and a drive is easy to add.' },
+  sz_vram:  { cat: 'capacity', group: 'Graphics memory', name: 'Graphics memory', unit: 'GB', general: 0, ref: 10, curve: [[1, 250], [2, 450], [4, 700], [8, 950], [10, 1000], [16, 1060], [24, 1100]], what: 'Memory the graphics chip can use: its own, or half the system\'s where the two are shared. It decides which games and AI models fit at all.' },
 };
 
 // Installed memory in GB from the byte count the computer test reports (the system keeps a little back).
@@ -142,58 +142,67 @@ export function scoreTest(id, value, profile, browser = false) {
   return ref ? 1000 * value / ref : null;
 }
 
+// Use cases. Each one re-weights the parts, can lean on some groups of tests inside a part (a group
+// not listed counts as 1, and a weight of 0 leaves the group out) and on kinds of CPU work, and has
+// its own curves for memory, graphics memory and drive size (sizes; [GB, points]). Every curve gives
+// the reference machine's 32 GB, 10 GB of graphics memory and 4 TB 1000 points.
+// Which sizes count at all (groups.capacity): memory size everywhere; graphics memory where the work
+// uses it (games, AI, design, video, engineering, science); drive size only for a server, because
+// more space does not make a computer faster and a drive is easy to add. The plain system score
+// counts memory size alone, which is what `general: 0` on the other two size tests tells the
+// computer test's own total (keep the two in step).
 const CPU_EVEN = { 'One core': 1, 'Six threads': 1, 'All cores': 1 };
 export const PROFILES = [
   { id: 'general', name: 'General use', score: 'System score', blurb: 'An even mix of everything.',
-    weights: { cpu: 0.35, gpu: 0.25, memory: 0.15, 'storage-speed': 0.25, capacity: 0.12 }, groups: { cpu: CPU_EVEN }, sizes: {} },
+    weights: { cpu: 0.35, gpu: 0.25, memory: 0.15, 'storage-speed': 0.25, capacity: 0.10 }, groups: { cpu: CPU_EVEN, capacity: { Storage: 0, 'Graphics memory': 0 } }, sizes: {} },
   { id: 'gaming', name: 'Gaming', score: 'Gaming score', blurb: 'Mostly the graphics chip drawing frames, then fast cores: games lean on one main thread and a handful of helpers, rarely more than six to eight. 16 GB of memory runs most games, 32 GB all of them.',
     weights: { cpu: 0.25, gpu: 0.55, memory: 0.08, 'storage-speed': 0.12, capacity: 0.08 },
-    groups: { gpu: { Drawing: 3, 'Ray tracing': 1, Compute: 1, Transfer: 1, Video: 0.5 }, cpu: { 'One core': 2, 'Six threads': 3, 'All cores': 0.5 }, capacity: { 'Graphics memory': 2.5, Memory: 1.5 }, 'storage-speed': { 'Busy drive': 0.5 } },
+    groups: { gpu: { Drawing: 3, 'Ray tracing': 1, Compute: 1, Transfer: 1, Video: 0.5 }, cpu: { 'One core': 2, 'Six threads': 3, 'All cores': 0.5 }, 'storage-speed': { 'Busy drive': 0.5 }, capacity: { 'Graphics memory': 2.5, Memory: 1.5, Storage: 0 } },
     kinds: { sim: 3, apps: 1, media: 1, maths: 0.5 },
     sizes: { sz_ram: [[4, 80], [8, 350], [16, 850], [32, 1000]], sz_drive: [[256, 350], [512, 650], [1000, 830], [2000, 950], [4000, 1000]], sz_vram: [[2, 150], [4, 400], [6, 620], [8, 820], [10, 1000], [12, 1120], [16, 1300], [24, 1450], [32, 1500]] } },
   { id: 'office', name: 'Office work', score: 'Office score', blurb: 'Snappy single cores, quick small-file storage and responsive memory. The graphics chip barely matters, and 16 GB is plenty.',
     weights: { cpu: 0.45, gpu: 0.07, memory: 0.20, 'storage-speed': 0.28, capacity: 0.06 },
-    groups: { cpu: { 'One core': 3, 'Six threads': 1.5, 'All cores': 0.3 }, 'storage-speed': { 'Busy drive': 0.5, 'Small pieces': 2.5 }, memory: { Latency: 2, Allocation: 2 }, capacity: { 'Graphics memory': 0.2 } },
+    groups: { cpu: { 'One core': 3, 'Six threads': 1.5, 'All cores': 0.3 }, 'storage-speed': { 'Busy drive': 0.5, 'Small pieces': 2.5 }, memory: { Latency: 2, Allocation: 2 }, capacity: { Storage: 0, 'Graphics memory': 0 } },
     kinds: { apps: 3, media: 1, sim: 0.5, maths: 0.3 },
     sizes: { sz_ram: [[2, 60], [4, 300], [8, 720], [16, 950], [32, 1000]], sz_drive: [[64, 300], [128, 560], [256, 800], [512, 950], [1000, 1000]], sz_vram: [[1, 600], [2, 850], [4, 950], [10, 1000]] } },
   { id: 'design', name: 'Graphic design and photo', score: 'Design score', blurb: 'A balance of processor, graphics and plenty of fast memory for big images and many layers.',
     weights: { cpu: 0.35, gpu: 0.25, memory: 0.20, 'storage-speed': 0.20, capacity: 0.12 },
-    groups: { gpu: { Drawing: 2, Compute: 1.5, 'Ray tracing': 0.5 }, cpu: { 'One core': 1.5, 'Six threads': 1.5, 'All cores': 1 } },
+    groups: { gpu: { Drawing: 2, Compute: 1.5, 'Ray tracing': 0.5 }, cpu: { 'One core': 1.5, 'Six threads': 1.5, 'All cores': 1 }, capacity: { Storage: 0 } },
     kinds: { media: 3 },
     sizes: { sz_ram: [[4, 80], [8, 400], [16, 750], [32, 1000], [64, 1150], [128, 1220]], sz_drive: [[256, 420], [512, 650], [1000, 800], [2000, 920], [4000, 1000], [8000, 1060]], sz_vram: [[2, 300], [4, 600], [8, 900], [10, 1000], [16, 1150], [24, 1250]] } },
-  { id: 'video', name: 'Video editing', score: 'Video editing score', blurb: 'Every core, video encoding on the graphics chip, fast big-file storage, and room for hours of footage.',
-    weights: { cpu: 0.30, gpu: 0.30, memory: 0.12, 'storage-speed': 0.28, capacity: 0.15 },
-    groups: { cpu: { 'All cores': 2.5, 'Six threads': 1, 'One core': 1 }, gpu: { Video: 3, Compute: 1.5, 'Ray tracing': 0.5 }, 'storage-speed': { 'Big files': 2.5 }, capacity: { Storage: 2 } },
+  { id: 'video', name: 'Video editing', score: 'Video editing score', blurb: 'Every core, video encoding on the graphics chip, fast big-file storage and plenty of memory.',
+    weights: { cpu: 0.30, gpu: 0.30, memory: 0.12, 'storage-speed': 0.28, capacity: 0.12 },
+    groups: { cpu: { 'All cores': 2.5, 'Six threads': 1, 'One core': 1 }, gpu: { Video: 3, Compute: 1.5, 'Ray tracing': 0.5 }, 'storage-speed': { 'Big files': 2.5 }, capacity: { Storage: 0 } },
     kinds: { media: 3 },
     sizes: { sz_ram: [[4, 60], [8, 320], [16, 680], [32, 1000], [64, 1180], [128, 1300]], sz_drive: [[256, 200], [512, 350], [1000, 550], [2000, 780], [4000, 1000], [8000, 1220], [16000, 1400], [32000, 1520]], sz_vram: [[2, 250], [4, 500], [8, 850], [10, 1000], [16, 1200], [24, 1350], [48, 1450]] } },
   { id: 'dev', name: 'Software development', score: 'Development score', blurb: 'Compiling on every core, lots of small files, and memory for editors, browsers and containers side by side.',
     weights: { cpu: 0.45, gpu: 0.05, memory: 0.20, 'storage-speed': 0.30, capacity: 0.10 },
-    groups: { cpu: { 'All cores': 2, 'Six threads': 1, 'One core': 1 }, 'storage-speed': { 'Busy drive': 1.5, 'Small pieces': 3 }, capacity: { 'Graphics memory': 0.2 } },
+    groups: { cpu: { 'All cores': 2, 'Six threads': 1, 'One core': 1 }, 'storage-speed': { 'Busy drive': 1.5, 'Small pieces': 3 }, capacity: { Storage: 0, 'Graphics memory': 0 } },
     kinds: { apps: 2.5 },
     sizes: { sz_ram: [[4, 80], [8, 450], [16, 800], [32, 1000], [64, 1130], [128, 1200]], sz_drive: [[128, 300], [256, 580], [512, 800], [1000, 920], [2000, 980], [4000, 1000]], sz_vram: [[1, 500], [2, 750], [4, 900], [10, 1000], [24, 1050]] } },
   { id: 'engineering', name: 'Engineering and CAD', score: 'Engineering score', blurb: 'CAD modelling runs mostly on one core while the graphics chip draws the model; simulation and rendering use every core and lots of memory.',
     weights: { cpu: 0.35, gpu: 0.30, memory: 0.12, 'storage-speed': 0.13, capacity: 0.12 },
-    groups: { cpu: { 'One core': 2.5, 'Six threads': 1.5, 'All cores': 1 }, gpu: { Drawing: 3, 'Ray tracing': 1.5, Compute: 1, Video: 0.25 }, capacity: { 'Graphics memory': 1.5, Memory: 1.5 } },
+    groups: { cpu: { 'One core': 2.5, 'Six threads': 1.5, 'All cores': 1 }, gpu: { Drawing: 3, 'Ray tracing': 1.5, Compute: 1, Video: 0.25 }, capacity: { 'Graphics memory': 1.5, Memory: 1.5, Storage: 0 } },
     kinds: { maths: 2, sim: 2, media: 1.5 },
     sizes: { sz_ram: [[4, 60], [8, 330], [16, 700], [32, 1000], [64, 1200], [128, 1320], [256, 1380]], sz_drive: [[256, 450], [512, 650], [1000, 820], [2000, 940], [4000, 1000], [8000, 1050]], sz_vram: [[2, 250], [4, 550], [8, 880], [10, 1000], [16, 1200], [24, 1350], [48, 1500]] } },
   { id: 'ai', name: 'AI and machine learning', score: 'AI score', blurb: 'GPU compute first, then how much memory there is: the size of a model you can run locally is set by memory. Matrix maths on every core and memory bandwidth follow.',
     weights: { cpu: 0.20, gpu: 0.55, memory: 0.15, 'storage-speed': 0.10, capacity: 0.25 },
-    groups: { gpu: { Compute: 4, Transfer: 1.5, Drawing: 0.5, 'Ray tracing': 0.25, Video: 0.25 }, cpu: { 'All cores': 2, 'Six threads': 1, 'One core': 1 }, memory: { Bandwidth: 2 }, capacity: { 'Graphics memory': 3, Memory: 2, Storage: 0.5 } },
+    groups: { gpu: { Compute: 4, Transfer: 1.5, Drawing: 0.5, 'Ray tracing': 0.25, Video: 0.25 }, cpu: { 'All cores': 2, 'Six threads': 1, 'One core': 1 }, memory: { Bandwidth: 2 }, capacity: { 'Graphics memory': 3, Memory: 2, Storage: 0 } },
     kinds: { maths: 3 },
     sizes: { sz_ram: [[4, 40], [8, 200], [16, 500], [32, 1000], [64, 1450], [128, 1850], [256, 2150], [512, 2350]], sz_drive: [[256, 380], [512, 620], [1000, 800], [2000, 930], [4000, 1000], [8000, 1060]], sz_vram: [[2, 80], [4, 250], [8, 750], [10, 1000], [12, 1200], [16, 1500], [24, 1950], [48, 2500], [96, 2900], [192, 3150]] } },
   { id: 'science', name: 'Science and simulation', score: 'Science score', blurb: 'Floating-point maths on every core and the graphics chip, memory bandwidth, and enough memory to hold the whole model: research problems grow to fill whatever there is.',
     weights: { cpu: 0.40, gpu: 0.20, memory: 0.22, 'storage-speed': 0.08, capacity: 0.20 },
-    groups: { cpu: { 'All cores': 3, 'Six threads': 1, 'One core': 1 }, gpu: { Compute: 4, Transfer: 1.5, Drawing: 0.25, 'Ray tracing': 0.25, Video: 0.1 }, memory: { Bandwidth: 3 }, capacity: { Memory: 3, 'Graphics memory': 1.5 } },
+    groups: { cpu: { 'All cores': 3, 'Six threads': 1, 'One core': 1 }, gpu: { Compute: 4, Transfer: 1.5, Drawing: 0.25, 'Ray tracing': 0.25, Video: 0.1 }, memory: { Bandwidth: 3 }, capacity: { Memory: 3, 'Graphics memory': 1.5, Storage: 0 } },
     kinds: { maths: 3, sim: 2 },
     sizes: { sz_ram: [[4, 40], [8, 220], [16, 520], [32, 1000], [64, 1400], [128, 1750], [256, 2000], [512, 2200], [1024, 2300]], sz_drive: [[256, 300], [512, 500], [1000, 680], [2000, 850], [4000, 1000], [8000, 1180], [16000, 1320], [32000, 1420]], sz_vram: [[2, 150], [4, 400], [8, 820], [10, 1000], [16, 1300], [24, 1550], [48, 1900], [96, 2100]] } },
   { id: 'virtual', name: 'Virtual machines', score: 'Virtual machine score', blurb: 'Many systems on one computer: every one needs its own memory, so size counts most, then cores, then quick small-file storage for their disks.',
     weights: { cpu: 0.30, gpu: 0.03, memory: 0.17, 'storage-speed': 0.20, capacity: 0.30 },
-    groups: { cpu: { 'All cores': 3, 'Six threads': 1, 'One core': 1 }, memory: { Bandwidth: 2 }, 'storage-speed': { 'Busy drive': 3, 'Small pieces': 2.5 }, capacity: { Memory: 3, 'Graphics memory': 0.1 } },
+    groups: { cpu: { 'All cores': 3, 'Six threads': 1, 'One core': 1 }, memory: { Bandwidth: 2 }, 'storage-speed': { 'Busy drive': 3, 'Small pieces': 2.5 }, capacity: { Storage: 0, 'Graphics memory': 0 } },
     kinds: { apps: 2 },
     sizes: { sz_ram: [[4, 30], [8, 200], [16, 480], [32, 1000], [64, 1500], [128, 1950], [256, 2300], [512, 2550], [1024, 2700], [2048, 2800]], sz_drive: [[256, 280], [512, 480], [1000, 680], [2000, 860], [4000, 1000], [8000, 1150], [16000, 1250], [32000, 1300]], sz_vram: [[1, 600], [4, 900], [10, 1000], [24, 1050]] } },
   { id: 'server', name: 'Home server and NAS', score: 'Server score', blurb: 'Room for files above all, then storage speed, memory for caching and apps, cores for many small jobs, and the video encoder for streaming. Drawing speed does not matter.',
     weights: { cpu: 0.20, gpu: 0.03, memory: 0.10, 'storage-speed': 0.30, capacity: 0.37 },
-    groups: { cpu: { 'All cores': 1.5, 'Six threads': 1, 'One core': 1 }, gpu: { Video: 4, Compute: 0.5, Drawing: 0.1, 'Ray tracing': 0.1, Transfer: 0.5 }, 'storage-speed': { 'Busy drive': 3, 'Big files': 2, 'Small pieces': 1.5 }, capacity: { Storage: 3, 'Graphics memory': 0.1 } },
+    groups: { cpu: { 'All cores': 1.5, 'Six threads': 1, 'One core': 1 }, gpu: { Video: 4, Compute: 0.5, Drawing: 0.1, 'Ray tracing': 0.1, Transfer: 0.5 }, 'storage-speed': { 'Busy drive': 3, 'Big files': 2, 'Small pieces': 1.5 }, capacity: { Storage: 3, 'Graphics memory': 0 } },
     kinds: { apps: 2.5, media: 0.5, sim: 0.5 },
     sizes: { sz_ram: [[2, 60], [4, 250], [8, 550], [16, 820], [32, 1000], [64, 1180], [128, 1320], [256, 1420], [512, 1480]], sz_drive: [[256, 120], [512, 250], [1000, 420], [2000, 700], [4000, 1000], [8000, 1300], [16000, 1580], [32000, 1820], [64000, 2000], [128000, 2120], [256000, 2200]], sz_vram: [[1, 700], [4, 950], [10, 1000]] } },
 ];
@@ -203,6 +212,7 @@ export function scoreRun(run, profile = PROFILES[0]) {
   if (run.suite === SUITE) for (const [id, v] of Object.entries(run.tests || {})) {
     const s = scoreTest(id, v, profile, browser); if (s == null) continue;
     const t = TESTS[id], w = (profile.groups?.[t.cat]?.[t.group] ?? 1) * (t.kind ? profile.kinds?.[t.kind] ?? 1 : 1);
+    if (!(w > 0)) continue;                             // this use case leaves the test out
     tests[id] = s; const c = (sums[t.cat] ||= { lw: 0, w: 0 }); c.lw += w * Math.log(s); c.w += w;
   }
   const cats = {}; let lw = 0, w = 0;

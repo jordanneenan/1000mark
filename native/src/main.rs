@@ -117,7 +117,7 @@ fn say(label: &str) { print!("\r\x1b[2K  ▓ {label}"); let _ = std::io::stdout(
 
 // ---------- scoring, read from the site's own scoring.js so the two never disagree ----------
 const SCORING: &str = include_str!("../../scoring.js");
-struct TestDef { cat: String, group: String, name: String, unit: String, div: f64, rf: Option<f64>, curve: Vec<(f64, f64)> }
+struct TestDef { cat: String, group: String, name: String, unit: String, div: f64, rf: Option<f64>, curve: Vec<(f64, f64)>, general: bool }
 /// A size test's general-use curve, `curve: [[GB, points], ...]` on its line in scoring.js.
 fn curve(line: &str) -> Vec<(f64, f64)> {
     let Some(i) = line.find(" curve: [[") else { return Vec::new() };
@@ -154,7 +154,7 @@ impl Scorer {
             let rest = format!(" {}", rest.trim_start().trim_start_matches('{'));
             let rf = if rest.contains("unscored: true") { None } else { field(&rest, "ref").and_then(|v| v.parse().ok()) };
             tests.insert(id.to_string(), TestDef { cat: field(&rest, "cat").unwrap_or("").into(), group: field(&rest, "group").unwrap_or("").into(), name: field(&rest, "name").unwrap_or(id).into(),
-                unit: field(&rest, "unit").unwrap_or("").into(), div: field(&rest, "div").and_then(|v| v.parse().ok()).unwrap_or(1.0), rf, curve: curve(&rest) });
+                unit: field(&rest, "unit").unwrap_or("").into(), div: field(&rest, "div").and_then(|v| v.parse().ok()).unwrap_or(1.0), rf, curve: curve(&rest), general: field(&rest, "general") != Some("0") });
         }
         Scorer { tests, cats, got: Vec::new(), last: (String::new(), String::new()) }
     }
@@ -166,7 +166,7 @@ impl Scorer {
         let cat = self.cats.iter().find(|c| c.0 == t.cat).map(|c| c.1.clone()).unwrap_or_default();
         print!("\r\x1b[2K");
         if self.last != (t.cat.clone(), t.group.clone()) { println!("\n  {} · {}", cat.to_uppercase(), t.group.to_lowercase()); self.last = (t.cat.clone(), t.group.clone()); }
-        let p = self.points(id, v).map(|p| format!("{:>6.0} pts", p)).unwrap_or_else(|| "  (not scored)".into());
+        let p = if !t.general { "  (use-case scores only)".to_string() } else { self.points(id, v).map(|p| format!("{:>6.0} pts", p)).unwrap_or_else(|| "  (not scored)".into()) };
         println!("    {:<26} {:>10} {:<11}{p}", t.name, fmt(v / t.div), t.unit);
     }
     /// Part scores (geometric mean of each part's tests) and the system score (weighted geometric mean of the parts).
@@ -174,7 +174,7 @@ impl Scorer {
         println!("\n  ════════════════════════════════════════════════════");
         let (mut lw, mut w) = (0.0, 0.0);
         for (id, name, weight) in &self.cats {
-            let ps: Vec<f64> = self.got.iter().filter(|(t, _)| self.tests.get(t).map(|d| &d.cat == id).unwrap_or(false)).filter_map(|(t, v)| self.points(t, *v)).collect();
+            let ps: Vec<f64> = self.got.iter().filter(|(t, _)| self.tests.get(t).map(|d| &d.cat == id && d.general).unwrap_or(false)).filter_map(|(t, v)| self.points(t, *v)).collect();
             if ps.is_empty() { println!("    {:<38} {:>10}", name.to_uppercase(), "not tested"); continue; }
             let g = (ps.iter().map(|p| p.ln()).sum::<f64>() / ps.len() as f64).exp();
             lw += weight * g.ln(); w += weight;

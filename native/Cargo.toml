@@ -1,6 +1,6 @@
 [package]
 name = "pressmark"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 description = "1000Mark computer test: tests the CPU, GPU, memory and storage directly and shows the results in the browser."
 
