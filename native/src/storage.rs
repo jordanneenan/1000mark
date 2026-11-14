@@ -10,7 +10,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 const MB: usize = 1 << 20;
-const CH: usize = 4 * MB;
+/// Sequential tests move 64 MB per request. At 4 MB a request a fast NVMe drive is held back by the
+/// gaps between requests (2.2 GB/s against 6.8 GB/s for a 990 PRO), so the old n_sto_seq_* tests
+/// measured the request size more than the drive. Those ids stay for old runs.
+const CH: usize = 64 * MB;
 
 struct Aligned { ptr: *mut u8, len: usize, layout: Layout }
 impl Aligned {
@@ -53,23 +56,23 @@ pub fn run(dir: &Path, quick: bool, mut put: impl FnMut(&str, f64), mut say: imp
         let mut rng = Lcg(4242);
         let mut chunk = Aligned::new(CH);
         for b in chunk.buf().chunks_exact_mut(4) { b.copy_from_slice(&rng.next().to_le_bytes()); }   // incompressible
-        let target = if quick { 256 * MB } else { 1024 * MB } as u64;
+        let target = if quick { 256 * MB } else { 2048 * MB } as u64;
         let limit = Duration::from_secs(if quick { 4 } else { 10 });
 
         say("Storage · sequential write");
         let t0 = Instant::now(); let mut written = 0u64;
         while written < target && t0.elapsed() < limit { write_at(&f, chunk.buf(), written)?; written += CH as u64; }
         f.sync_all()?;
-        put("n_sto_seq_write", written as f64 / MB as f64 / t0.elapsed().as_secs_f64());
+        put("n_sto_big_write", written as f64 / MB as f64 / t0.elapsed().as_secs_f64());
 
         say("Storage · sequential read");
         let mut best = 0f64;
-        for _ in 0..2 {                                   // read speed wobbles from run to run, so take the better of two passes
+        for _ in 0..3 {                                   // read speed wobbles from run to run, so take the best of three passes
             let t0 = Instant::now(); let mut read = 0u64;
             while read < written && t0.elapsed() < limit { read_at(&f, chunk.buf(), read)?; read += CH as u64; }
             best = best.max(read as f64 / MB as f64 / t0.elapsed().as_secs_f64());
         }
-        put("n_sto_seq_read", best);
+        put("n_sto_big_read", best);
 
         let blocks = written / 4096;
         let span = Duration::from_millis(if quick { 1000 } else { 2500 });

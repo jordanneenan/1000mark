@@ -8,7 +8,12 @@
 // tests get new ids with their own references; they never change an existing one.
 // Scale 2 (2026-11-13): storage space no longer counts towards any score (a browser cannot see it,
 // and it is not speed). Test references are unchanged from scale 1.
-export const SCALE = 2;
+// Scale 3 (2026-11-14): memory size and drive size count again, in a fifth part, Capacity, which
+// only the computer test can measure (a browser cannot see either). Browser storage tests are no longer
+// scored: browsers serve them from memory and their own databases, so a faster drive could score lower.
+// The computer test's sequential tests moved to 64 MB requests under new ids (n_sto_big_*).
+// Existing references are unchanged.
+export const SCALE = 3;
 export const REF_DEVICE = 'a Ryzen 9 5950X + RTX 3080 desktop, November 2026';
 
 export const CATS = [
@@ -16,9 +21,11 @@ export const CATS = [
   { id: 'gpu', name: 'GPU speed', short: 'GPU', weight: 0.25, ink: 'pink', blurb: 'Graphics chip: number-crunching, drawing, moving data, and video encoding and decoding.' },
   { id: 'memory', name: 'Memory speed', short: 'Memory', weight: 0.15, ink: 'mint', blurb: 'How fast RAM can be filled, read, copied and jumped around in.' },
   { id: 'storage-speed', name: 'Storage speed', short: 'Storage', weight: 0.25, ink: 'ink', blurb: 'How fast the device can write and read files, in big streams and in small scattered pieces.' },
+  { id: 'capacity', name: 'Capacity', short: 'Size', weight: 0.10, ink: 'mint', blurb: 'How much memory and storage the computer has. Measured by the computer test only: a browser cannot see either.' },
 ];
 
-// div turns the raw rate into the display unit. scale 'log' is for capacities.
+// div turns the raw rate into the display unit. scale 'sqrt' is for sizes: four times the memory
+// or drive scores twice the points, so size counts without swamping speed.
 export const TESTS = {
   cpu_int:      { cat: 'cpu', group: 'One core', name: 'Integer maths', unit: 'M ops/s', div: 1e6, ref: 730, what: 'Shifts, xors and multiplies: everyday program logic.' },
   cpu_float:    { cat: 'cpu', group: 'One core', name: 'Floating point', unit: 'M iter/s', div: 1e6, ref: 490, what: 'A Mandelbrot set in double precision.' },
@@ -59,13 +66,17 @@ export const TESTS = {
   n_mem_random:  { cat: 'memory', group: 'Latency', name: 'Random jumps', unit: 'M hops/s', div: 1e6, ref: 14.45, what: 'Chasing pointers through 128 MB: one cache miss per hop.' },
   n_mem_alloc:   { cat: 'memory', group: 'Allocation', name: 'Make and drop objects', unit: 'M allocs/s', div: 1e6, ref: 55.6, what: 'Lots of small short-lived allocations.' },
 
-  n_sto_seq_write:  { cat: 'storage-speed', group: 'Big files', name: 'Sequential write', unit: 'MB/s', ref: 1940, what: 'Writing a 1 GB file start to finish, cache bypassed.' },
-  n_sto_seq_read:   { cat: 'storage-speed', group: 'Big files', name: 'Sequential read', unit: 'MB/s', ref: 4612, what: 'Reading it back from the drive, cache bypassed.' },
+  n_sto_big_write:  { cat: 'storage-speed', group: 'Big files', name: 'Sequential write', unit: 'MB/s', ref: 2300, what: 'Writing a 2 GB file in 64 MB pieces, cache bypassed.' },
+  n_sto_big_read:   { cat: 'storage-speed', group: 'Big files', name: 'Sequential read', unit: 'MB/s', ref: 6750, what: 'Reading it back from the drive in 64 MB pieces, cache bypassed.' },
+  // Computer test 0.2 and older: 4 MB pieces, which held fast drives back.
+  n_sto_seq_write:  { cat: 'storage-speed', group: 'Big files', name: 'Sequential write (4 MB pieces)', unit: 'MB/s', ref: 1940, what: 'Writing a 1 GB file start to finish, cache bypassed.' },
+  n_sto_seq_read:   { cat: 'storage-speed', group: 'Big files', name: 'Sequential read (4 MB pieces)', unit: 'MB/s', ref: 4612, what: 'Reading it back from the drive, cache bypassed.' },
   n_sto_rand_write: { cat: 'storage-speed', group: 'Small pieces', name: 'Random 4K write', unit: 'IOPS', ref: 21090, what: 'Small writes scattered across the file, one at a time.' },
   n_sto_rand_read:  { cat: 'storage-speed', group: 'Small pieces', name: 'Random 4K read', unit: 'IOPS', ref: 20680, what: 'Small reads scattered across the file, one at a time.' },
   n_sto_files:      { cat: 'storage-speed', group: 'Small pieces', name: 'Small files', unit: 'files/s', ref: 26530, what: 'Creating, writing and deleting many little files.' },
 
-  n_sto_total: { cat: 'storage-speed', group: 'Capacity', name: 'Drive size', unit: 'GB', unscored: true, what: 'Total size of the drive that was tested.' },
+  n_mem_size:  { cat: 'capacity', group: 'Memory', name: 'Memory size', unit: 'GB', ref: 32, scale: 'sqrt', what: 'Installed RAM. More keeps big projects, many apps and local AI models in memory.' },
+  n_sto_total: { cat: 'capacity', group: 'Storage', name: 'Drive size', unit: 'GB', ref: 4000, scale: 'sqrt', what: 'Total size of the drive that was tested.' },
 
   mem_write:  { cat: 'memory', group: 'Bandwidth', name: 'Fill', unit: 'GB/s', div: 1e9, ref: 25, what: 'Writing one value across a big block.' },
   mem_read:   { cat: 'memory', group: 'Bandwidth', name: 'Scan', unit: 'GB/s', div: 1e9, ref: 4.8, what: 'Reading a big block end to end.' },
@@ -73,11 +84,11 @@ export const TESTS = {
   mem_random: { cat: 'memory', group: 'Latency', name: 'Random jumps', unit: 'M hops/s', div: 1e6, ref: 19.8, what: 'Chasing pointers through a block bigger than the cache.' },
   mem_alloc:  { cat: 'memory', group: 'Allocation', name: 'Make and drop objects', unit: 'M allocs/s', div: 1e6, ref: 102, what: 'Lots of small short-lived objects.' },
 
-  sto_seq_write:  { cat: 'storage-speed', group: 'Big files', name: 'Sequential write', unit: 'MB/s', ref: 2200, what: 'Writing one large file start to finish.' },
-  sto_seq_read:   { cat: 'storage-speed', group: 'Big files', name: 'Sequential read', unit: 'MB/s', ref: 3900, what: 'Reading it back. The system may serve this from memory.' },
-  sto_rand_write: { cat: 'storage-speed', group: 'Small pieces', name: 'Random 4K write', unit: 'IOPS', ref: 17500, what: 'Small writes scattered across the file.' },
-  sto_rand_read:  { cat: 'storage-speed', group: 'Small pieces', name: 'Random 4K read', unit: 'IOPS', ref: 37000, what: 'Small reads scattered across the file.' },
-  sto_files:      { cat: 'storage-speed', group: 'Small pieces', name: 'Small files', unit: 'files/s', ref: 5800, what: 'Creating, writing and deleting many little files.' },
+  sto_seq_write:  { cat: 'storage-speed', group: 'Big files', name: 'Sequential write', unit: 'MB/s', ref: 2200, unscored: true, what: 'Writing one large file start to finish.' },
+  sto_seq_read:   { cat: 'storage-speed', group: 'Big files', name: 'Sequential read', unit: 'MB/s', ref: 3900, unscored: true, what: 'Reading it back. The system may serve this from memory.' },
+  sto_rand_write: { cat: 'storage-speed', group: 'Small pieces', name: 'Random 4K write', unit: 'IOPS', ref: 17500, unscored: true, what: 'Small writes scattered across the file.' },
+  sto_rand_read:  { cat: 'storage-speed', group: 'Small pieces', name: 'Random 4K read', unit: 'IOPS', ref: 37000, unscored: true, what: 'Small reads scattered across the file.' },
+  sto_files:      { cat: 'storage-speed', group: 'Small pieces', name: 'Small files', unit: 'files/s', ref: 5800, unscored: true, what: 'Creating, writing and deleting many little files.' },
 
   sto_space: { cat: 'storage-speed', group: 'Capacity', name: 'Space available', unit: 'GB', unscored: true, hidden: true, what: 'Old browser runs only: room the browser would give one site.' },
 
@@ -100,35 +111,45 @@ export const TESTS = {
   vid_dec_av1:  { cat: 'gpu', group: 'Video', name: 'AV1 decode 1080p', unit: 'fps', unscored: true },
 };
 
+// Installed memory in GB from the byte count the computer test reports (the system keeps a little back).
+export const ramGB = bytes => { const g = bytes / 2 ** 30; return g >= 6 ? Math.round(g / 2) * 2 : Math.round(g); };
+// Computer-test runs from before 0.3 carry the memory size only in device.memoryBytes; give them the test too.
+export function addSizes(run) {
+  const d = run.device || {};
+  if ((run.native || d.native) && d.memoryBytes > 0 && run.tests && run.tests.n_mem_size == null) run.tests.n_mem_size = ramGB(d.memoryBytes);
+  return run;
+}
+
 export function scoreTest(id, value) {
   const t = TESTS[id];
   if (!t || t.unscored || !(value > 0)) return null;
+  if (t.scale === 'sqrt') return 1000 * Math.sqrt(value / t.ref);
   if (t.scale === 'log') return 1000 * Math.log2(1 + value) / Math.log2(1 + t.ref);
   return 1000 * value / t.ref;
 }
 
-// Use cases. Each one re-weights the five parts, and can lean on some groups of tests inside a
+// Use cases. Each one re-weights the parts, and can lean on some groups of tests inside a
 // part (a group not listed counts as 1). "General use" is the plain system score.
 export const PROFILES = [
   { id: 'general', name: 'General use', score: 'System score', blurb: 'An even mix of everything.',
-    weights: { cpu: 0.35, gpu: 0.25, memory: 0.15, 'storage-speed': 0.25 }, groups: {} },
+    weights: { cpu: 0.35, gpu: 0.25, memory: 0.15, 'storage-speed': 0.25, capacity: 0.10 }, groups: {} },
   { id: 'gaming', name: 'Gaming', score: 'Gaming score', blurb: 'Mostly the graphics chip drawing frames, then fast single cores.',
-    weights: { cpu: 0.25, gpu: 0.55, memory: 0.08, 'storage-speed': 0.12 },
+    weights: { cpu: 0.25, gpu: 0.55, memory: 0.08, 'storage-speed': 0.12, capacity: 0.08 },
     groups: { gpu: { Drawing: 3, Compute: 1, Transfer: 1, Video: 0.5 }, cpu: { 'One core': 2 } } },
-  { id: 'ai', name: 'AI and machine learning', score: 'AI score', blurb: 'GPU compute first, then matrix maths on every core and memory bandwidth.',
-    weights: { cpu: 0.20, gpu: 0.55, memory: 0.15, 'storage-speed': 0.10 },
-    groups: { gpu: { Compute: 4, Transfer: 1.5, Drawing: 0.5, Video: 0.25 }, cpu: { 'All cores': 2 }, memory: { Bandwidth: 2 } } },
+  { id: 'ai', name: 'AI and machine learning', score: 'AI score', blurb: 'GPU compute first, then how much memory there is for models, matrix maths on every core and memory bandwidth.',
+    weights: { cpu: 0.20, gpu: 0.55, memory: 0.15, 'storage-speed': 0.10, capacity: 0.25 },
+    groups: { gpu: { Compute: 4, Transfer: 1.5, Drawing: 0.5, Video: 0.25 }, cpu: { 'All cores': 2 }, memory: { Bandwidth: 2 }, capacity: { Memory: 3 } } },
   { id: 'design', name: 'Graphic design and photo', score: 'Design score', blurb: 'A balance of processor, graphics and plenty of fast memory.',
-    weights: { cpu: 0.35, gpu: 0.25, memory: 0.20, 'storage-speed': 0.20 },
+    weights: { cpu: 0.35, gpu: 0.25, memory: 0.20, 'storage-speed': 0.20, capacity: 0.12 },
     groups: { gpu: { Drawing: 2, Compute: 1.5 }, cpu: { 'One core': 1.5 } } },
   { id: 'video', name: 'Video editing', score: 'Video editing score', blurb: 'Every core, video encoding on the graphics chip, and fast big-file storage.',
-    weights: { cpu: 0.30, gpu: 0.30, memory: 0.12, 'storage-speed': 0.28 },
-    groups: { cpu: { 'All cores': 2.5 }, gpu: { Video: 3, Compute: 1.5 }, 'storage-speed': { 'Big files': 2.5 } } },
+    weights: { cpu: 0.30, gpu: 0.30, memory: 0.12, 'storage-speed': 0.28, capacity: 0.15 },
+    groups: { cpu: { 'All cores': 2.5 }, gpu: { Video: 3, Compute: 1.5 }, 'storage-speed': { 'Big files': 2.5 }, capacity: { Storage: 2 } } },
   { id: 'office', name: 'Office work', score: 'Office score', blurb: 'Snappy single cores, quick small-file storage and responsive memory. The graphics chip barely matters.',
-    weights: { cpu: 0.45, gpu: 0.07, memory: 0.20, 'storage-speed': 0.28 },
+    weights: { cpu: 0.45, gpu: 0.07, memory: 0.20, 'storage-speed': 0.28, capacity: 0.05 },
     groups: { cpu: { 'One core': 3 }, 'storage-speed': { 'Small pieces': 2.5 }, memory: { Latency: 2, Allocation: 2 } } },
   { id: 'dev', name: 'Software development', score: 'Development score', blurb: 'Compiling on every core, and lots of small files.',
-    weights: { cpu: 0.45, gpu: 0.05, memory: 0.20, 'storage-speed': 0.30 },
+    weights: { cpu: 0.45, gpu: 0.05, memory: 0.20, 'storage-speed': 0.30, capacity: 0.10 },
     groups: { cpu: { 'All cores': 2 }, 'storage-speed': { 'Small pieces': 3 } } },
 ];
 

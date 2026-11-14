@@ -113,7 +113,7 @@ fn say(label: &str) { print!("\r\x1b[2K  ▓ {label}"); let _ = std::io::stdout(
 
 // ---------- scoring, read from the site's own scoring.js so the two never disagree ----------
 const SCORING: &str = include_str!("../../scoring.js");
-struct TestDef { cat: String, group: String, name: String, unit: String, div: f64, rf: Option<f64> }
+struct TestDef { cat: String, group: String, name: String, unit: String, div: f64, rf: Option<f64>, sqrt: bool }
 fn field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let i = line.find(&format!(" {key}: "))? + key.len() + 3;
     let rest = &line[i..];
@@ -136,11 +136,11 @@ impl Scorer {
             let rest = format!(" {}", rest.trim_start().trim_start_matches('{'));
             let rf = if rest.contains("unscored: true") { None } else { field(&rest, "ref").and_then(|v| v.parse().ok()) };
             tests.insert(id.to_string(), TestDef { cat: field(&rest, "cat").unwrap_or("").into(), group: field(&rest, "group").unwrap_or("").into(), name: field(&rest, "name").unwrap_or(id).into(),
-                unit: field(&rest, "unit").unwrap_or("").into(), div: field(&rest, "div").and_then(|v| v.parse().ok()).unwrap_or(1.0), rf });
+                unit: field(&rest, "unit").unwrap_or("").into(), div: field(&rest, "div").and_then(|v| v.parse().ok()).unwrap_or(1.0), rf, sqrt: field(&rest, "scale") == Some("sqrt") });
         }
         Scorer { tests, cats, got: Vec::new(), last: (String::new(), String::new()) }
     }
-    fn points(&self, id: &str, v: f64) -> Option<f64> { let t = self.tests.get(id)?; let r = t.rf?; if v > 0.0 { Some(1000.0 * v / t.div / r) } else { None } }
+    fn points(&self, id: &str, v: f64) -> Option<f64> { let t = self.tests.get(id)?; let r = t.rf?; if !(v > 0.0) { return None; } let x = v / t.div / r; Some(1000.0 * if t.sqrt { x.sqrt() } else { x }) }
     /// Print one finished test as a permanent line, under a heading for its part and group.
     fn show(&mut self, id: &str, v: f64) {
         self.got.push((id.to_string(), v));
@@ -173,6 +173,8 @@ fn device_name(cpu: &str, form: &str) -> String {
     let c = words.join(" ");
     if c.is_empty() { format!("My {form}") } else { format!("{c} {form}") }
 }
+/// Installed memory in GB: the system keeps a little for itself, so round up to the size on the box.
+fn ram_gb(bytes: u64) -> f64 { let g = bytes as f64 / (1u64 << 30) as f64; if g >= 6.0 { (g / 2.0).round() * 2.0 } else { g.round() } }
 fn fmt(v: f64) -> String { if v >= 100.0 { format!("{:.0}", v) } else if v >= 10.0 { format!("{:.1}", v) } else { format!("{:.2}", v) } }
 
 /// Post the run to the site and get a token the results page can claim it with.
@@ -190,7 +192,7 @@ fn main() {
     let has = |f: &str| args.iter().any(|a| a == f);
     let val = |f: &str| args.iter().position(|a| a == f).and_then(|i| args.get(i + 1)).cloned();
     if has("--help") || has("-h") {
-        println!("1000Mark {}\n\nTests this computer, lists each result as it finishes, then opens the results page.\n\n  --name NAME    what to call this device (default: its computer name)\n  --dir PATH     folder on the drive to test (default: your home folder)\n  --server URL   the Pressmark site to show results on (default {DEFAULT_SERVER})\n  --local        show the results on this computer only, without sending them to the site\n  --show-data    print exactly what is sent before sending it\n  --no-open      do not open the browser\n  --connect KEY  send every run straight to your account (key from the account page)\n  --disconnect   stop sending runs to an account\n  --json-only    save the results file and exit\n  --port N       port for the local results page (default 4174)", env!("CARGO_PKG_VERSION"));
+        println!("1000Mark {}\n\nTests this computer, lists each result as it finishes, then opens the results page.\n\n  --name NAME    what to call this device (default: named after its processor)\n  --dir PATH     folder on the drive to test (default: your home folder)\n  --server URL   the 1000Mark site to show results on (default {DEFAULT_SERVER})\n  --local        show the results on this computer only, without sending them to the site\n  --show-data    print exactly what is sent before sending it\n  --no-open      do not open the browser\n  --connect KEY  send every run straight to your account (key from the account page)\n  --disconnect   stop sending runs to an account\n  --json-only    save the results file and exit\n  --port N       port for the local results page (default 4174)", env!("CARGO_PKG_VERSION"));
         return;
     }
     if let Some(key) = val("--connect") {
@@ -226,7 +228,7 @@ fn main() {
     let disk_json: Vec<Value> = disks.iter().filter(|d| d.total_space() > 0).map(|d| json!({ "fs": d.file_system().to_string_lossy(), "kind": format!("{:?}", d.kind()), "total": d.total_space(), "free": d.available_space(), "removable": d.is_removable() })).collect();
     let here = disks.iter().filter(|d| dir.starts_with(d.mount_point())).max_by_key(|d| d.mount_point().as_os_str().len());
 
-    println!("\n  1000MARK {} · computer test\n  {cpu_name} · {cores} cores, {threads} threads · {:.0} GB RAM\n  Testing the drive that holds {shown_dir}\n  Leave the computer alone until it finishes (about two minutes).", env!("CARGO_PKG_VERSION"), ram as f64 / 1e9);
+    println!("\n  1000MARK {} · computer test\n  {cpu_name} · {cores} cores, {threads} threads · {:.0} GB RAM\n  Testing the drive that holds {shown_dir}\n  Leave the computer alone until it finishes (about two minutes).", env!("CARGO_PKG_VERSION"), ram_gb(ram));
 
     let mut sc = Scorer::new();
     let mut errors = Map::new();
@@ -246,7 +248,6 @@ fn main() {
         Err(e) => { errors.insert("storage".into(), json!(format!("{e} (testing in {shown_dir})"))); }
     }
     if let Some(d) = here {
-        sc.got.push(("n_sto_total".into(), d.total_space() as f64 / 1e9));
         info.insert("quota".into(), json!(d.total_space())); info.insert("usage".into(), json!(d.total_space() - d.available_space()));
         info.insert("disk".into(), json!({ "fs": d.file_system().to_string_lossy(), "kind": format!("{:?}", d.kind()) }));
     }
@@ -262,6 +263,9 @@ fn main() {
         Some(i) => { info.insert("gpuApi".into(), json!(format!("{} (native)", i.backend))); info.insert("gpuAdapter".into(), json!(format!("{} · {}", i.name, i.driver))); info.insert("gpuKind".into(), json!(i.kind)); (i.name.clone(), i.others.clone()) }
         None => { errors.insert("gpu".into(), json!("No graphics adapter was found that supports Vulkan, Metal or DirectX 12.")); (String::new(), vec![]) }
     };
+    // ---------- capacity (computer test only: a browser cannot see these) ----------
+    sc.show("n_mem_size", ram_gb(ram));
+    if let Some(d) = here { sc.show("n_sto_total", d.total_space() as f64 / 1e9); }
     print!("\r\x1b[2K");
     for (k, v) in &errors { println!("    ✗ {k}: {}", v.as_str().unwrap_or("")); }
     sc.summary();

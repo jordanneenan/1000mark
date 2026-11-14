@@ -86,8 +86,15 @@ fn storage_buf(d: &wgpu::Device, size: u64) -> wgpu::Buffer {
     d.create_buffer(&wgpu::BufferDescriptor { label: None, size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false })
 }
 
+/// The shaders are our own, check their own bounds and have bounded loops, so wgpu need not add
+/// bounds checks. On Metal it otherwise wraps every buffer read in one, which made matrix compute
+/// run at a third of the browser's speed on Apple GPUs (Vulkan and DX12 check in hardware).
+fn shader(d: &wgpu::Device, code: &str) -> wgpu::ShaderModule {
+    unsafe { d.create_shader_module_trusted(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(code.into()) }, wgpu::ShaderRuntimeChecks::unchecked()) }
+}
+
 fn compute_pipe(d: &wgpu::Device, code: &str) -> wgpu::ComputePipeline {
-    let module = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(code.into()) });
+    let module = shader(d, code);
     d.create_compute_pipeline(&wgpu::ComputePipelineDescriptor { label: None, layout: None, module: &module, entry_point: Some("main"), compilation_options: Default::default(), cache: None })
 }
 
@@ -129,7 +136,7 @@ fn render(d: &wgpu::Device, q: &wgpu::Queue, ms: u64, code: &str, instances: u32
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let tex = d.create_texture(&wgpu::TextureDescriptor { label: None, size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 }, mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[] });
     let view = tex.create_view(&Default::default());
-    let module = d.create_shader_module(wgpu::ShaderModuleDescriptor { label: None, source: wgpu::ShaderSource::Wgsl(code.into()) });
+    let module = shader(d, code);
     let pipe = d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: None, layout: None,
         vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },

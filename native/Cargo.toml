@@ -1,6 +1,6 @@
 [package]
 name = "pressmark"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 description = "1000Mark computer test: tests the CPU, GPU, memory and storage directly and shows the results in the browser."
 
@@ -16,6 +16,10 @@ ureq = "2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Without "asm", sha2 uses plain code on ARM (Apple Silicon) and skips the CPU's SHA-256 instructions.
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+sha2 = { version = "0.10", features = ["asm"] }
 
 [profile.release]
 opt-level = 3
